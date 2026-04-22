@@ -184,7 +184,11 @@ function stripOurHooks(settings: Settings): Settings {
     }
     if (cleaned.length > 0) next[event] = cleaned;
   }
-  settings.hooks = next;
+  if (Object.keys(next).length === 0) {
+    delete settings.hooks;
+  } else {
+    settings.hooks = next;
+  }
   return settings;
 }
 
@@ -195,6 +199,12 @@ async function vendorPackageFiles(): Promise<void> {
   // Copy dist/ to ~/.claude-care2/dist/
   await rm(join(CARE_DIR, "dist"), { recursive: true, force: true });
   await cp(here, join(CARE_DIR, "dist"), { recursive: true });
+  // Write a minimal package.json so Node treats the vendored dir as ESM.
+  await writeFile(
+    join(CARE_DIR, "dist", "package.json"),
+    JSON.stringify({ type: "module" }, null, 2) + "\n",
+    "utf8",
+  );
   // Copy framing.md for reference/edit
   const framingSrc = join(pkgRoot, "framing.md");
   if (existsSync(framingSrc)) {
