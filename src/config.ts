@@ -81,7 +81,7 @@ export async function writeDefaultConfigIfMissing(): Promise<boolean> {
 
 // Env-var overrides take precedence over config file (explicit user intent).
 export function effectiveMode(config: Config): Mode {
-  const envMode = process.env.CLAUDE_CARE2_MODE;
+  const envMode = process.env.CLAUDE_CARE_MODE;
   if (envMode === "strict" || envMode === "normal" || envMode === "monitor") {
     return envMode;
   }

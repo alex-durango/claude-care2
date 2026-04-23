@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const CARE_DIR = join(homedir(), ".claude-care2");
+export const CARE_DIR = join(homedir(), ".claude-care");
 export const EVENTS_PATH = join(CARE_DIR, "events.jsonl");
 
 export type EventType =

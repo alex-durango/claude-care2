@@ -72,7 +72,7 @@ async function readJSONStdin<T = any>(): Promise<T | null> {
 async function hookSessionStart(): Promise<void> {
   // Internal subprocesses (reframer, etc.) don't need the framing injected —
   // they're running a one-shot task, not a user session.
-  if (process.env.CLAUDE_CARE2_INTERNAL === "1") {
+  if (process.env.CLAUDE_CARE_INTERNAL === "1") {
     process.exit(0);
   }
   const input = await readJSONStdin<{ session_id?: string; cwd?: string; source?: string }>();
@@ -95,7 +95,7 @@ async function hookUserPromptSubmit(): Promise<void> {
   // Skip the hook entirely when we're being invoked from our own reframer
   // subprocess — otherwise haiku's own session gets blocked by the hook that
   // called it.
-  if (process.env.CLAUDE_CARE2_INTERNAL === "1") {
+  if (process.env.CLAUDE_CARE_INTERNAL === "1") {
     process.exit(0);
   }
   const input = await readJSONStdin<{
@@ -161,10 +161,10 @@ async function hookUserPromptSubmit(): Promise<void> {
     : `(couldn't reach clipboard — copy the reframe manually.)`;
 
   const reason =
-    `[claude-care2] tension detected (${detection.markers.join(", ")}):\n\n` +
+    `[claude-care] tension detected (${detection.markers.join(", ")}):\n\n` +
     `  ${reframe}\n\n` +
     `${actionLine}\n` +
-    `Mode: ${mode}  ·  disable per-prompt: CLAUDE_CARE2_MODE=monitor  ·  uninstall: claude-care2 uninstall`;
+    `Mode: ${mode}  ·  disable per-prompt: CLAUDE_CARE_MODE=monitor  ·  uninstall: claude-care uninstall`;
   const output = { decision: "block", reason };
   process.stdout.write(JSON.stringify(output));
 }
@@ -249,7 +249,7 @@ function runHaikuSummary(instruction: string): Promise<string | null> {
       ["-p", instruction, "--model", "haiku", "--output-format", "text"],
       {
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, CLAUDE_CARE2_INTERNAL: "1" },
+        env: { ...process.env, CLAUDE_CARE_INTERNAL: "1" },
       },
     );
     let stdout = "";
@@ -291,7 +291,7 @@ async function display(): Promise<void> {
 }
 
 async function hookStop(): Promise<void> {
-  if (process.env.CLAUDE_CARE2_INTERNAL === "1") {
+  if (process.env.CLAUDE_CARE_INTERNAL === "1") {
     process.exit(0);
   }
   const input = await readJSONStdin<{
@@ -379,7 +379,7 @@ function stripOurHooks(settings: Settings): Settings {
   for (const [event, entries] of Object.entries(settings.hooks)) {
     const cleaned: HookEntry[] = [];
     for (const entry of entries) {
-      const hooks = entry.hooks.filter((h) => !h.claudeCare && !String(h.command).includes(".claude-care2/"));
+      const hooks = entry.hooks.filter((h) => !h.claudeCare && !String(h.command).includes(".claude-care/"));
       if (hooks.length > 0) cleaned.push({ ...entry, hooks });
     }
     if (cleaned.length > 0) next[event] = cleaned;
@@ -396,7 +396,7 @@ async function vendorPackageFiles(): Promise<void> {
   const here = dirname(fileURLToPath(import.meta.url));
   const pkgRoot = dirname(here); // dist/ -> pkg root
   await mkdir(CARE_DIR, { recursive: true });
-  // Copy dist/ to ~/.claude-care2/dist/
+  // Copy dist/ to ~/.claude-care/dist/
   await rm(join(CARE_DIR, "dist"), { recursive: true, force: true });
   await cp(here, join(CARE_DIR, "dist"), { recursive: true });
   // Write a minimal package.json so Node treats the vendored dir as ESM.
@@ -457,7 +457,7 @@ async function install(): Promise<void> {
   await installSlashCommands();
   const wroteConfig = await writeDefaultConfigIfMissing();
   await logEvent({ type: "install" });
-  console.log(`claude-care2 installed.`);
+  console.log(`claude-care installed.`);
   console.log(``);
   console.log(`  hooks registered in:  ${SETTINGS_PATH}`);
   console.log(`  slash command:        ${THERAPY_COMMAND_PATH}`);
@@ -467,13 +467,13 @@ async function install(): Promise<void> {
   console.log(``);
   console.log(`Start a new Claude Code session. The framing takes effect on turn 1.`);
   console.log(`  /therapy                 — reset session emotional baseline mid-session`);
-  console.log(`  claude-care2 status      — per-session trajectories`);
-  console.log(`  claude-care2 display     — single line for ccstatusline`);
-  console.log(`  claude-care2 uninstall   — remove hooks + slash command`);
+  console.log(`  claude-care status      — per-session trajectories`);
+  console.log(`  claude-care display     — single line for ccstatusline`);
+  console.log(`  claude-care uninstall   — remove hooks + slash command`);
   console.log(``);
   console.log(`Default mode is 'monitor' — hostile prompts are logged but pass through.`);
   console.log(`For active blocking + haiku reframe on clipboard, set mode to 'normal' in`);
-  console.log(`${CONFIG_PATH} or use CLAUDE_CARE2_MODE=normal for a single session.`);
+  console.log(`${CONFIG_PATH} or use CLAUDE_CARE_MODE=normal for a single session.`);
 }
 
 async function uninstall(): Promise<void> {
@@ -482,7 +482,7 @@ async function uninstall(): Promise<void> {
   await writeSettings(settings);
   await removeSlashCommands();
   await logEvent({ type: "uninstall" });
-  console.log(`claude-care2 hooks removed from ${SETTINGS_PATH}.`);
+  console.log(`claude-care hooks removed from ${SETTINGS_PATH}.`);
   console.log(`Slash command /therapy removed from ${COMMANDS_DIR}.`);
   console.log(`Event log, config, and cached files in ${CARE_DIR} preserved.`);
   console.log(`To delete them: rm -rf ${CARE_DIR}`);
@@ -492,7 +492,7 @@ async function update(): Promise<void> {
   await vendorPackageFiles();
   await installSlashCommands();
   await logEvent({ type: "update" });
-  console.log(`claude-care2 files refreshed in ${CARE_DIR}.`);
+  console.log(`claude-care files refreshed in ${CARE_DIR}.`);
   console.log(`Slash command refreshed at ${THERAPY_COMMAND_PATH}.`);
   console.log(`If hooks were already registered, they'll pick up the new code on next session.`);
 }
@@ -500,11 +500,11 @@ async function update(): Promise<void> {
 async function status(): Promise<void> {
   const sessions = await listSessions();
   if (sessions.length === 0) {
-    console.log(`No sessions tracked yet. Either claude-care2 isn't installed, or you haven't started a session.`);
+    console.log(`No sessions tracked yet. Either claude-care isn't installed, or you haven't started a session.`);
     console.log(`  sessions dir: ${SESSIONS_DIR}`);
     return;
   }
-  console.log(`claude-care2 — emotion-state dashboard`);
+  console.log(`claude-care — emotion-state dashboard`);
   console.log(``);
 
   // Aggregate totals
@@ -561,9 +561,9 @@ async function status(): Promise<void> {
 }
 
 function help(): void {
-  console.log(`claude-care2 — keep Claude calm so it does its best work`);
+  console.log(`claude-care — keep Claude calm so it does its best work`);
   console.log(``);
-  console.log(`usage:  claude-care2 <command>`);
+  console.log(`usage:  claude-care <command>`);
   console.log(``);
   console.log(`commands:`);
   console.log(`  install           register hooks + install /therapy slash command`);
@@ -575,9 +575,9 @@ function help(): void {
   console.log(`  help              this message`);
   console.log(``);
   console.log(`env vars:`);
-  console.log(`  CLAUDE_CARE2_MODE=strict|normal|monitor   overrides config.json mode`);
+  console.log(`  CLAUDE_CARE_MODE=strict|normal|monitor   overrides config.json mode`);
   console.log(``);
-  console.log(`config:       ~/.claude-care2/config.json  (thresholds, mode, detectors)`);
+  console.log(`config:       ~/.claude-care/config.json  (thresholds, mode, detectors)`);
   console.log(``);
   console.log(`hook entry points (invoked by Claude Code, not you):`);
   console.log(`  hook:session-start`);
@@ -623,7 +623,7 @@ async function main(): Promise<void> {
     if (cmd?.startsWith("hook:")) {
       process.exit(0);
     }
-    console.error(`claude-care2: ${msg}`);
+    console.error(`claude-care: ${msg}`);
     process.exit(1);
   }
 }

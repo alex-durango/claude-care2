@@ -49,7 +49,7 @@ function callHaiku(prompt: string): Promise<string> {
         stdio: ["ignore", "pipe", "pipe"],
         // Mark this call as internal so our own hooks no-op on the subprocess
         // (prevents recursion when the reframer's prompt mentions hostile text).
-        env: { ...process.env, CLAUDE_CARE2_INTERNAL: "1" },
+        env: { ...process.env, CLAUDE_CARE_INTERNAL: "1" },
       },
     );
     let stdout = "";
