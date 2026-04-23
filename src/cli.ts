@@ -654,8 +654,7 @@ async function status(): Promise<void> {
         for (const e of EMOTIONS) avg[e] += t.emotion_scores![e];
       }
       for (const e of EMOTIONS) avg[e] = avg[e] / scoredTurns.length;
-      const ranked = EMOTIONS
-        .filter((e) => e !== "neutral" || avg[e] >= 40)
+      const ranked = (EMOTIONS as readonly string[])
         .map((e) => [e, avg[e]] as const)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
