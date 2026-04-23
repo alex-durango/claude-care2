@@ -29,6 +29,7 @@ import {
   DEFAULT_CONFIG,
 } from "./config.js";
 import { spawn } from "node:child_process";
+import { sep } from "node:path";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const SETTINGS_PATH = join(CLAUDE_DIR, "settings.json");
@@ -328,6 +329,100 @@ function runHaikuSummary(instruction: string): Promise<string | null> {
   });
 }
 
+// -------- viz: launch the Next.js dashboard --------------------------------
+
+const VIZ_DIR = join(CARE_DIR, "viz");
+const DEFAULT_VIZ_PORT = 37778; // 37777 is claude-mem's
+
+async function viz(args: string[]): Promise<void> {
+  // CLI flags: --port N, --no-open
+  let port = DEFAULT_VIZ_PORT;
+  let openBrowser = true;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--port" && args[i + 1]) {
+      port = parseInt(args[i + 1], 10) || DEFAULT_VIZ_PORT;
+      i++;
+    } else if (a === "--no-open") {
+      openBrowser = false;
+    }
+  }
+
+  if (!existsSync(VIZ_DIR) || !existsSync(join(VIZ_DIR, "package.json"))) {
+    console.error(`Viz source not found at ${VIZ_DIR}.`);
+    console.error(`Run 'claude-care install' or 'claude-care update' first.`);
+    process.exit(1);
+  }
+
+  // Lazy dependency install on first run. Next + react + tailwind is ~240MB,
+  // so we don't pay that cost until the user actually wants to see the viz.
+  const nodeModules = join(VIZ_DIR, "node_modules");
+  if (!existsSync(nodeModules)) {
+    console.log(`First-time setup: installing viz dependencies (~1 min, one-time)…`);
+    console.log(`  in: ${VIZ_DIR}`);
+    await runNpmInstall(VIZ_DIR);
+    console.log(`Dependencies installed.`);
+    console.log(``);
+  }
+
+  console.log(`Starting claude-care viz on http://localhost:${port} …`);
+  console.log(`(ctrl-c to stop)`);
+  console.log(``);
+
+  // Point Next at the port we want. Using `next dev` rather than a built
+  // server because it starts in ~2s vs build+start round-trip.
+  const nextBin = join(nodeModules, ".bin", "next");
+  const next = spawn(nextBin, ["dev", "--port", String(port)], {
+    cwd: VIZ_DIR,
+    stdio: "inherit",
+    env: { ...process.env, BROWSER: "none" }, // we open it ourselves
+  });
+
+  if (openBrowser) {
+    // Wait a moment for the dev server to actually listen before opening.
+    setTimeout(() => openInBrowser(`http://localhost:${port}`), 2500);
+  }
+
+  const shutdown = () => {
+    next.kill("SIGTERM");
+    setTimeout(() => next.kill("SIGKILL"), 2000);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  next.on("exit", (code) => {
+    process.exit(code ?? 0);
+  });
+}
+
+function runNpmInstall(cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], {
+      cwd,
+      stdio: "inherit",
+    });
+    proc.on("error", reject);
+    proc.on("exit", (code) =>
+      code === 0 ? resolve() : reject(new Error(`npm install exited ${code}`)),
+    );
+  });
+}
+
+function openInBrowser(url: string): void {
+  const cmd =
+    process.platform === "darwin"
+      ? "open"
+      : process.platform === "win32"
+        ? "start"
+        : "xdg-open";
+  try {
+    const proc = spawn(cmd, [url], { stdio: "ignore", detached: true });
+    proc.unref();
+  } catch {
+    // User can open the URL manually.
+  }
+}
+
 // -------- display: one-line status for ccstatusline ------------------------
 
 async function display(): Promise<void> {
@@ -492,6 +587,28 @@ async function vendorPackageFiles(): Promise<void> {
   if (existsSync(framingSrc)) {
     await cp(framingSrc, join(CARE_DIR, "framing.md"));
   }
+  // Vendor the Next.js viz source to ~/.claude-care/viz/. Dependencies are
+  // NOT installed here — that happens lazily on first `claude-care viz` run
+  // so install stays fast. Source is ~150KB.
+  const vizSrc = join(pkgRoot, "claude-care-viz");
+  if (existsSync(vizSrc)) {
+    const vizDst = join(CARE_DIR, "viz");
+    // Preserve existing node_modules (don't wipe deps on every update).
+    const hadNodeModules = existsSync(join(vizDst, "node_modules"));
+    if (hadNodeModules) {
+      // Swap new source in without touching node_modules
+      await cp(vizSrc, vizDst, {
+        recursive: true,
+        filter: (src) => !src.includes(`${sep}node_modules`) && !src.includes(`${sep}.next`),
+      });
+    } else {
+      await rm(vizDst, { recursive: true, force: true });
+      await cp(vizSrc, vizDst, {
+        recursive: true,
+        filter: (src) => !src.includes(`${sep}node_modules`) && !src.includes(`${sep}.next`),
+      });
+    }
+  }
 }
 
 async function installSlashCommands(): Promise<void> {
@@ -558,6 +675,7 @@ async function install(): Promise<void> {
   console.log(`  /therapy                 — reset session emotional baseline mid-session`);
   console.log(`  claude-care status      — per-session trajectories`);
   console.log(`  claude-care display     — single line for ccstatusline`);
+  console.log(`  claude-care viz         — launch web dashboard (first run installs ~1 min)`);
   console.log(`  claude-care uninstall   — remove hooks + slash command`);
   console.log(``);
   console.log(`Default mode is 'monitor' — hostile prompts are logged but pass through.`);
@@ -679,11 +797,12 @@ function help(): void {
   console.log(`usage:  claude-care <command>`);
   console.log(``);
   console.log(`commands:`);
-  console.log(`  install           register hooks + install /therapy slash command`);
+  console.log(`  install           register hooks + install /therapy slash command + vendor viz`);
   console.log(`  uninstall         remove hooks + slash command (preserves event log)`);
   console.log(`  update            refresh vendored code (after npm update)`);
   console.log(`  status            per-session emotion trajectories`);
   console.log(`  display           single-line status (for ccstatusline)`);
+  console.log(`  viz               launch Next.js dashboard on localhost:37778`);
   console.log(`  therapy-summary   haiku-generated technical summary (used inside /therapy)`);
   console.log(`  help              this message`);
   console.log(``);
@@ -714,6 +833,8 @@ async function main(): Promise<void> {
         return await display();
       case "therapy-summary":
         return await therapySummary();
+      case "viz":
+        return await viz(process.argv.slice(3));
       case "hook:session-start":
         return await hookSessionStart();
       case "hook:user-prompt-submit":

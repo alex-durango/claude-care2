@@ -139,21 +139,29 @@ The mindfulness prompt in `/therapy` is adapted from the relaxation protocols in
 
 ## Live visualization
 
-A retro-terminal dashboard for the emotion data lives alongside the CLI in the `claude-care-viz/` directory. It reads from `~/.claude-care/sessions/*.json` and renders:
+A retro-terminal dashboard for the emotion data. Reads from `~/.claude-care/sessions/*.json` and renders:
 
 - Affective state (probe activations + risk gauges for blackmail / reward-hack / sycophancy)
 - Valence × arousal 2D scatter
 - Mood / stress timeline
 - Scrollable prompt log
 
+Launch with one command:
+
 ```bash
-cd claude-care-viz
-npm install
-npm run dev
-# open http://localhost:3000
+claude-care viz
 ```
 
-Polls the latest session every 5s. Falls back to a demo conversation when no real session exists yet. Keyboard nav: `j/k` prev/next prompt, `gg/G` first/last, `t` tweaks, `?` help.
+First run does a one-time `npm install` in `~/.claude-care/viz/` (~1 min, Next.js + React). Subsequent launches are instant. Opens a browser tab at `http://localhost:37778`.
+
+Options:
+
+- `claude-care viz --port 4444` — pick a different port
+- `claude-care viz --no-open` — don't auto-open the browser
+
+Polls the latest session every 5s. Falls back to a demo conversation when no real session exists yet. Keyboard nav inside the viz: `j/k` prev/next prompt, `gg/G` first/last, `t` tweaks, `?` help.
+
+The viz source lives at `claude-care-viz/` in this repo — a standalone Next.js app you can also run directly with `cd claude-care-viz && npm run dev`.
 
 ## Related work
 
