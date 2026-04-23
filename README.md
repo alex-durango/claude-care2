@@ -137,6 +137,24 @@ The mindfulness prompt in `/therapy` is adapted from the relaxation protocols in
 
 ---
 
+## Live visualization
+
+A retro-terminal dashboard for the emotion data lives alongside the CLI in the `claude-care-viz/` directory. It reads from `~/.claude-care/sessions/*.json` and renders:
+
+- Affective state (probe activations + risk gauges for blackmail / reward-hack / sycophancy)
+- Valence × arousal 2D scatter
+- Mood / stress timeline
+- Scrollable prompt log
+
+```bash
+cd claude-care-viz
+npm install
+npm run dev
+# open http://localhost:3000
+```
+
+Polls the latest session every 5s. Falls back to a demo conversation when no real session exists yet. Keyboard nav: `j/k` prev/next prompt, `gg/G` first/last, `t` tweaks, `?` help.
+
 ## Related work
 
 - [**EmoBar**](https://github.com/v4l3r10/emobar) is the diagnostic counterpart — a status-bar widget that surfaces Claude's emotional state in real time via self-report + behavioral analysis. claude-care and EmoBar pair well: EmoBar observes, claude-care intervenes.
