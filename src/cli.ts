@@ -593,20 +593,22 @@ async function vendorPackageFiles(): Promise<void> {
   const vizSrc = join(pkgRoot, "claude-care-viz");
   if (existsSync(vizSrc)) {
     const vizDst = join(CARE_DIR, "viz");
-    // Preserve existing node_modules (don't wipe deps on every update).
+    // Exclude node_modules and .next from the copy, but match them as path
+    // SEGMENTS relative to vizSrc — not as substrings of the absolute path.
+    // Otherwise the filter spuriously rejects everything when the package is
+    // installed under a `node_modules/` tree (globally-installed case).
+    const filter = (src: string): boolean => {
+      const rel = src.startsWith(vizSrc) ? src.slice(vizSrc.length) : src;
+      const segments = rel.split(sep).filter(Boolean);
+      return !segments.includes("node_modules") && !segments.includes(".next");
+    };
     const hadNodeModules = existsSync(join(vizDst, "node_modules"));
     if (hadNodeModules) {
       // Swap new source in without touching node_modules
-      await cp(vizSrc, vizDst, {
-        recursive: true,
-        filter: (src) => !src.includes(`${sep}node_modules`) && !src.includes(`${sep}.next`),
-      });
+      await cp(vizSrc, vizDst, { recursive: true, filter });
     } else {
       await rm(vizDst, { recursive: true, force: true });
-      await cp(vizSrc, vizDst, {
-        recursive: true,
-        filter: (src) => !src.includes(`${sep}node_modules`) && !src.includes(`${sep}.next`),
-      });
+      await cp(vizSrc, vizDst, { recursive: true, filter });
     }
   }
 }
