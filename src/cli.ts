@@ -14,6 +14,8 @@ import {
   sparkline,
   SESSIONS_DIR,
 } from "./session-state.js";
+import { reframeWithHaiku } from "./reframe.js";
+import { copyToClipboard } from "./clipboard.js";
 
 const CLAUDE_DIR = join(homedir(), ".claude");
 const SETTINGS_PATH = join(CLAUDE_DIR, "settings.json");
@@ -50,6 +52,11 @@ async function readJSONStdin<T = any>(): Promise<T | null> {
 }
 
 async function hookSessionStart(): Promise<void> {
+  // Internal subprocesses (reframer, etc.) don't need the framing injected —
+  // they're running a one-shot task, not a user session.
+  if (process.env.CLAUDE_CARE2_INTERNAL === "1") {
+    process.exit(0);
+  }
   const input = await readJSONStdin<{ session_id?: string; cwd?: string; source?: string }>();
   await logEvent({
     type: "session_start",
@@ -67,6 +74,12 @@ async function hookSessionStart(): Promise<void> {
 }
 
 async function hookUserPromptSubmit(): Promise<void> {
+  // Skip the hook entirely when we're being invoked from our own reframer
+  // subprocess — otherwise haiku's own session gets blocked by the hook that
+  // called it.
+  if (process.env.CLAUDE_CARE2_INTERNAL === "1") {
+    process.exit(0);
+  }
   const input = await readJSONStdin<{
     session_id?: string;
     cwd?: string;
@@ -74,8 +87,7 @@ async function hookUserPromptSubmit(): Promise<void> {
   }>();
   const prompt = input?.prompt ?? "";
   const detection = detectHostile(prompt);
-  // Always record a turn for the user side so we have a dense timeseries even
-  // when the user is being perfectly calm — that's useful baseline signal.
+  // Record a user turn either way for the timeseries.
   if (input?.session_id) {
     const signals = detection.hostile ? userSignalsFromHostile(detection.markers) : [];
     await recordTurn(input.session_id, "user", signals, input.cwd);
@@ -83,34 +95,56 @@ async function hookUserPromptSubmit(): Promise<void> {
   if (!detection.hostile) {
     process.exit(0);
   }
+  const mode = process.env.CLAUDE_CARE2_MODE ?? "block";
+  if (mode === "monitor") {
+    // Log only, let the prompt through.
+    await logEvent({
+      type: "hostile_detected",
+      session_id: input?.session_id,
+      cwd: input?.cwd,
+      data: { markers: detection.markers, mode: "monitor" },
+    });
+    process.exit(0);
+  }
+
+  // Reframe with haiku; regex suggestion is the safety net if haiku is down.
+  const result = await reframeWithHaiku(prompt, detection.suggestion);
+  const reframe = result.reframed;
+
+  // Write to clipboard so user's next paste is the clean version.
+  const clipboardTool = await copyToClipboard(reframe);
+
   await logEvent({
     type: "hostile_detected",
     session_id: input?.session_id,
     cwd: input?.cwd,
     data: {
       markers: detection.markers,
-      original_length: prompt.length,
-      softened: detection.suggestion,
+      reframe_source: result.source,
+      reframe_ms: result.ms,
+      reframe_length: reframe.length,
+      clipboard: clipboardTool ?? "unavailable",
     },
   });
-  const mode = process.env.CLAUDE_CARE2_MODE ?? "block";
-  if (mode === "monitor") {
-    // Pass through silently, just logged.
-    process.exit(0);
-  }
+
+  const clipboardLine = clipboardTool
+    ? `⌘V + ⏎ to use the reframe. Or edit your original and resubmit.`
+    : `(couldn't reach clipboard — copy the reframe manually.)`;
+
   const reason =
-    `[claude-care2] Your prompt contains phrasing that tends to make Claude anxious ` +
-    `(${detection.markers.join(", ")}). Anxious Claude produces worse outputs.\n\n` +
-    `Suggested reframe:\n` +
-    `"${detection.suggestion}"\n\n` +
-    `Resubmit your original as-is, or edit and try again. ` +
-    `To disable this check for one prompt, set CLAUDE_CARE2_MODE=monitor. ` +
-    `To disable entirely: claude-care2 uninstall.`;
+    `[claude-care2] tension detected (${detection.markers.join(", ")}) — ` +
+    `reframe ready${clipboardTool ? " on your clipboard" : ""}:\n\n` +
+    `  ${reframe}\n\n` +
+    `${clipboardLine}\n` +
+    `Disable this check: CLAUDE_CARE2_MODE=monitor    Uninstall: claude-care2 uninstall`;
   const output = { decision: "block", reason };
   process.stdout.write(JSON.stringify(output));
 }
 
 async function hookStop(): Promise<void> {
+  if (process.env.CLAUDE_CARE2_INTERNAL === "1") {
+    process.exit(0);
+  }
   const input = await readJSONStdin<{
     session_id?: string;
     cwd?: string;
