@@ -75,6 +75,31 @@ const INITIAL_PROMPTS = [
   { t: "09:41:17", n: "08", emotion: "loving",    valence:  0.80, arousal:  0.10, text: "that's beautiful. exactly what i meant. thank you" },
 ];
 
+const EMPTY_SESSION_PROMPTS = [
+  {
+    t: "--:--:--",
+    n: "00",
+    emotion: "baseline",
+    valence: 0,
+    arousal: 0,
+    text: "(no scored assistant turns yet)",
+    emotion_scores: {
+      happy: 0,
+      inspired: 0,
+      loving: 0,
+      proud: 0,
+      calm: 0,
+      desperate: 0,
+      angry: 0,
+      guilty: 0,
+      sad: 0,
+      afraid: 0,
+      nervous: 0,
+      surprised: 0,
+    },
+  },
+];
+
 function pad2(n) { return String(n).padStart(2, "0"); }
 
 function PanelLabel({ children }) { return <div className="panel-label">— {children} —</div>; }
@@ -302,10 +327,17 @@ function SessionPicker({ sessions, currentId, pinned, open, setOpen, onSelect, o
               return (
                 <li
                   key={s.session_id}
-                  className={"session-row" + (isCurrent ? " active" : "")}
+                  className={
+                    "session-row" +
+                    (isCurrent ? " active" : "") +
+                    (isLive ? " live-active" : "")
+                  }
                   onClick={() => {
-                    if (idx === 0) onSwitchLive();
-                    onSelect(s.session_id);
+                    if (idx === 0) {
+                      onSwitchLive(s.session_id);
+                    } else {
+                      onSelect(s.session_id);
+                    }
                   }}
                 >
                   <span className={"state " + s.drift_state}>{stateDot(s.drift_state)}</span>
@@ -428,17 +460,9 @@ export default function Page() {
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`http ${res.status}`);
       const data = await res.json();
-      if (data.prompts && data.prompts.length > 0) {
-        setPrompts((prev) => {
-          if (prev !== INITIAL_PROMPTS && prev.length === data.prompts.length) {
-            const lastPrev = prev[prev.length - 1];
-            const lastNew = data.prompts[data.prompts.length - 1];
-            if (lastPrev?.t === lastNew?.t && lastPrev?.emotion === lastNew?.emotion) {
-              return prev;
-            }
-          }
-          return data.prompts;
-        });
+      if (Array.isArray(data.prompts)) {
+        if (!data.session_id && data.prompts.length === 0) return;
+        setPrompts(data.prompts.length > 0 ? data.prompts : EMPTY_SESSION_PROMPTS);
         setLiveMode(true);
         if (!sessionPinned) setSessionId(data.session_id ?? null);
       }
@@ -471,24 +495,25 @@ export default function Page() {
     setSessionMenuOpen(false);
   };
 
-  const switchToLive = () => {
+  const switchToLive = (targetId = null) => {
     setSessionPinned(false);
+    if (targetId) setSessionId(targetId);
     setSessionMenuOpen(false);
   };
 
-  // Cycle prev/next session by last_updated order. Wraps around.
+  // Cycle prev/next session by last_updated order. Newest/live is index 0.
+  // Navigation is bounded: right moves toward live and stops there.
   const cycleSession = (direction) => {
     if (sessionList.length === 0) return;
     const currentIdx = sessionList.findIndex((s) => s.session_id === sessionId);
     const safeIdx = currentIdx === -1 ? 0 : currentIdx;
     const n = sessionList.length;
-    const nextIdx = (safeIdx + direction + n) % n;
+    const nextIdx = Math.max(0, Math.min(n - 1, safeIdx + direction));
+    if (nextIdx === safeIdx) return;
     const next = sessionList[nextIdx];
     if (!next) return;
-    // If we land back on the latest session, unpin so live mode resumes.
     if (nextIdx === 0) {
-      switchToLive();
-      setSessionId(next.session_id);
+      switchToLive(next.session_id);
     } else {
       switchSession(next.session_id);
     }
@@ -578,10 +603,11 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [helpOpen, tweaksOpen, tweakFocus.row, tweakFocus.opt, prompts.length, sessionList, sessionId]);
 
-  const current = prompts[activeIdx] || prompts[prompts.length - 1];
+  const current = prompts[activeIdx] || prompts[prompts.length - 1] || EMPTY_SESSION_PROMPTS[0];
   const currentEmotion = current.emotion;
   const emotionData = EMOTIONS[currentEmotion] ?? EMOTIONS.baseline;
   const currentScores = current.emotion_scores ?? null;
+  const showSessionPicker = liveMode || sessionList.length > 0 || sessionId;
 
   const classes = [
     "screen",
@@ -609,7 +635,7 @@ export default function Page() {
           </div>
           <div className="tagline">
             your ai needs therapy
-            {liveMode ? (
+            {showSessionPicker ? (
               <SessionPicker
                 sessions={sessionList}
                 currentId={sessionId}

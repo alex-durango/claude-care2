@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir, cp, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, cp, rm, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -17,6 +17,7 @@ import {
   loadSession,
   updateTurnEmotion,
   readConversation,
+  type SessionState,
 } from "./session-state.js";
 import { reframeWithHaiku } from "./reframe.js";
 import { copyToClipboard } from "./clipboard.js";
@@ -43,6 +44,114 @@ function deriveTranscriptPath(sessionId: string, cwd?: string): string | null {
   if (!sessionId || !cwd) return null;
   const slug = cwd.replace(/\//g, "-");
   return join(PROJECTS_DIR, slug, `${sessionId}.jsonl`);
+}
+
+async function findLatestTranscriptForCwd(
+  cwd: string,
+): Promise<{ sessionId: string; path: string } | null> {
+  const slug = cwd.replace(/\//g, "-");
+  const dir = join(PROJECTS_DIR, slug);
+  if (!existsSync(dir)) return null;
+  try {
+    const files = await readdir(dir);
+    let best: { sessionId: string; path: string; mtimeMs: number } | null = null;
+    for (const file of files) {
+      if (!file.endsWith(".jsonl")) continue;
+      const path = join(dir, file);
+      const s = await stat(path);
+      if (!s.isFile()) continue;
+      if (!best || s.mtimeMs > best.mtimeMs) {
+        best = {
+          sessionId: file.replace(/\.jsonl$/, ""),
+          path,
+          mtimeMs: s.mtimeMs,
+        };
+      }
+    }
+    return best ? { sessionId: best.sessionId, path: best.path } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveTranscriptPath(
+  sessionId?: string,
+  cwd?: string,
+  providedPath?: string,
+): Promise<string | null> {
+  if (providedPath && existsSync(providedPath)) return providedPath;
+  if (!sessionId) return null;
+
+  try {
+    const state = await loadSession(sessionId, cwd);
+    if (state.transcript_path && existsSync(state.transcript_path)) {
+      return state.transcript_path;
+    }
+  } catch {
+    // Fall through to the derived Claude Code transcript path.
+  }
+
+  const derived = deriveTranscriptPath(sessionId, cwd);
+  if (derived && existsSync(derived)) return derived;
+  return null;
+}
+
+function assistantConversationIndexForStateTurn(
+  state: SessionState,
+  turnIdx: number,
+  conversation: Array<{ role: "user" | "assistant"; content: string }>,
+): number | null {
+  if (state.turns[turnIdx]?.source !== "assistant") return null;
+  const assistantTurns = conversation
+    .map((t, i) => ({ t, i }))
+    .filter((x) => x.t.role === "assistant");
+  if (assistantTurns.length === 0) return null;
+
+  // Map from the end, not the start. Background workers can finish after more
+  // turns have happened, and readConversation intentionally keeps only a tail
+  // window for long transcripts.
+  const laterAssistantTurns = state.turns
+    .slice(turnIdx + 1)
+    .filter((t) => t.source === "assistant").length;
+  const conversationIdx = assistantTurns.length - 1 - laterAssistantTurns;
+  return assistantTurns[conversationIdx]?.i ?? null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readAssistantTranscriptSnapshot(
+  transcriptPath: string,
+): Promise<{ lastAssistantText: string; assistantTextTurns: number }> {
+  const raw = await readFile(transcriptPath, "utf8");
+  const lines = raw.trim().split("\n");
+  let lastAssistantText = "";
+  let assistantTextTurns = 0;
+  for (const line of lines) {
+    try {
+      const msg = JSON.parse(line);
+      if (msg.type === "assistant" && msg.message?.content) {
+        const content = msg.message.content;
+        let text = "";
+        if (Array.isArray(content)) {
+          text = content
+            .filter((c: any) => c.type === "text")
+            .map((c: any) => c.text)
+            .join("\n");
+        } else if (typeof content === "string") {
+          text = content;
+        }
+        if (text) {
+          assistantTextTurns++;
+          lastAssistantText = text;
+        }
+      }
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return { lastAssistantText, assistantTextTurns };
 }
 
 type HookCommand = { type: "command"; command: string; claudeCare?: true };
@@ -185,12 +294,11 @@ async function therapySummary(): Promise<void> {
     console.log("(no recent session — summarize from memory)");
     return;
   }
-  // Resolve transcript path: stored → derived → null
-  let transcriptPath = session.transcript_path;
-  if (!transcriptPath || !existsSync(transcriptPath)) {
-    const derived = deriveTranscriptPath(session.session_id, session.cwd);
-    if (derived && existsSync(derived)) transcriptPath = derived;
-  }
+  const transcriptPath = await resolveTranscriptPath(
+    session.session_id,
+    session.cwd,
+    session.transcript_path,
+  );
   if (!transcriptPath || !existsSync(transcriptPath)) {
     console.log("(transcript file not found — summarize from memory)");
     return;
@@ -303,38 +411,22 @@ async function rescore(args: string[]): Promise<void> {
   console.log(
     `session ${state.session_id.slice(0, 8)}: ${unscoredIndices.length} unscored assistant turn(s) — scoring now…`,
   );
-  // Resolve transcript path (stored or derived)
-  let transcriptPath = state.transcript_path;
-  if (!transcriptPath || !existsSync(transcriptPath)) {
-    const derived = deriveTranscriptPath(state.session_id, state.cwd);
-    if (derived && existsSync(derived)) transcriptPath = derived;
-  }
+  const transcriptPath = await resolveTranscriptPath(
+    state.session_id,
+    state.cwd,
+    state.transcript_path,
+  );
   if (!transcriptPath || !existsSync(transcriptPath)) {
     console.error(`no transcript available for this session; cannot score.`);
     process.exit(1);
   }
   const conversation = await readConversation(transcriptPath, 60);
-  // Map each unscored session-state turn to the corresponding assistant entry
-  // in the conversation array by order.
-  const assistantInConv = conversation
-    .map((t, i) => ({ t, i }))
-    .filter((x) => x.t.role === "assistant");
-  // Walk session turns to map assistant-state-indices to assistant-conversation-indices
-  const assistantStateIndices = state.turns
-    .map((t, i) => ({ t, i }))
-    .filter((x) => x.t.source === "assistant")
-    .map((x) => x.i);
   let completed = 0;
   for (const stateIdx of unscoredIndices) {
-    const assistantOrder = assistantStateIndices.indexOf(stateIdx);
-    if (assistantOrder < 0) continue;
-    // Find the corresponding entry in the conversation. If the conversation
-    // has more assistant turns than state (uncommon but possible on long
-    // sessions after compaction), take the Nth from the start.
-    const convEntry = assistantInConv[assistantOrder];
-    if (!convEntry) continue;
+    const convIdx = assistantConversationIndexForStateTurn(state, stateIdx, conversation);
+    if (convIdx === null) continue;
     process.stdout.write(`  scoring turn ${stateIdx}… `);
-    const result = await scoreTurn(conversation, convEntry.i, {
+    const result = await scoreTurn(conversation, convIdx, {
       nSamples: config.emotion_judge.n_samples,
       contextWindow: config.emotion_judge.context_window,
       timeoutMs: config.emotion_judge.timeout_ms,
@@ -368,19 +460,17 @@ async function hookScoreTurn(args: string[]): Promise<void> {
     if (!config.emotion_judge.enabled) process.exit(0);
     const state = await loadSession(sessionId);
     if (turnIdx >= state.turns.length) process.exit(0);
-    if (!state.transcript_path) process.exit(0);
-    const conversation = await readConversation(state.transcript_path, 40);
+    const transcriptPath = await resolveTranscriptPath(
+      state.session_id,
+      state.cwd,
+      state.transcript_path,
+    );
+    if (!transcriptPath) process.exit(0);
+    const conversation = await readConversation(transcriptPath, 120);
     if (conversation.length === 0) process.exit(0);
-    // Find the target turn in the conversation by role + approximate position.
-    // Session state counts user+assistant; conversation only has text turns.
-    // We score the most recent assistant turn that matches.
-    const assistantTurnsInConversation = conversation
-      .map((t, i) => ({ t, i }))
-      .filter((x) => x.t.role === "assistant");
-    if (assistantTurnsInConversation.length === 0) process.exit(0);
-    const latestAssistantIdx =
-      assistantTurnsInConversation[assistantTurnsInConversation.length - 1].i;
-    const result = await scoreTurn(conversation, latestAssistantIdx, {
+    const targetIdx = assistantConversationIndexForStateTurn(state, turnIdx, conversation);
+    if (targetIdx === null) process.exit(0);
+    const result = await scoreTurn(conversation, targetIdx, {
       nSamples: config.emotion_judge.n_samples,
       contextWindow: config.emotion_judge.context_window,
       timeoutMs: config.emotion_judge.timeout_ms,
@@ -555,42 +645,58 @@ async function hookStop(): Promise<void> {
     cwd?: string;
     transcript_path?: string;
   }>();
-  if (!input?.transcript_path || !existsSync(input.transcript_path)) {
+  let sessionId = input?.session_id;
+  const cwd = input?.cwd ?? process.cwd();
+  let transcriptPath = await resolveTranscriptPath(sessionId, cwd, input?.transcript_path);
+  if (!transcriptPath) {
+    const inferred = await findLatestTranscriptForCwd(cwd);
+    if (inferred) {
+      sessionId = sessionId ?? inferred.sessionId;
+      transcriptPath = inferred.path;
+    }
+  }
+  if (!transcriptPath) {
     process.exit(0);
   }
   try {
-    const raw = await readFile(input.transcript_path, "utf8");
-    const lines = raw.trim().split("\n").reverse();
-    let lastAssistantText = "";
-    for (const line of lines) {
-      try {
-        const msg = JSON.parse(line);
-        if (msg.type === "assistant" && msg.message?.content) {
-          const content = msg.message.content;
-          if (Array.isArray(content)) {
-            lastAssistantText = content
-              .filter((c: any) => c.type === "text")
-              .map((c: any) => c.text)
-              .join("\n");
-          } else if (typeof content === "string") {
-            lastAssistantText = content;
-          }
-          if (lastAssistantText) break;
+    let snapshot = await readAssistantTranscriptSnapshot(transcriptPath);
+    if (sessionId) {
+      for (let attempt = 0; attempt < 15; attempt++) {
+        const currentState = await loadSession(sessionId, cwd);
+        const recordedAssistantTurns = currentState.turns.filter(
+          (t) => t.source === "assistant",
+        ).length;
+        if (
+          snapshot.lastAssistantText &&
+          snapshot.assistantTextTurns > recordedAssistantTurns
+        ) {
+          break;
         }
-      } catch {
-        // skip malformed lines
+        if (attempt === 14) {
+          process.exit(0);
+        }
+        await sleep(150);
+        snapshot = await readAssistantTranscriptSnapshot(transcriptPath);
       }
     }
+    const { lastAssistantText, assistantTextTurns } = snapshot;
     if (lastAssistantText) {
       const signals = detectOutputSignals(lastAssistantText);
       let turnIdx: number | null = null;
-      if (input.session_id) {
+      if (sessionId) {
+        const currentState = await loadSession(sessionId, cwd);
+        const recordedAssistantTurns = currentState.turns.filter(
+          (t) => t.source === "assistant",
+        ).length;
+        if (recordedAssistantTurns >= assistantTextTurns) {
+          process.exit(0);
+        }
         const state = await recordTurn(
-          input.session_id,
+          sessionId,
           "assistant",
           signals,
-          input.cwd,
-          input.transcript_path,
+          cwd,
+          transcriptPath,
         );
         turnIdx = state.turns.length - 1;
       }
@@ -598,8 +704,8 @@ async function hookStop(): Promise<void> {
       if (apology) {
         await logEvent({
           type: "apology_spiral",
-          session_id: input.session_id,
-          cwd: input.cwd,
+          session_id: sessionId,
+          cwd,
           data: { hits: apology.hits, length: lastAssistantText.length },
         });
       }
@@ -607,8 +713,8 @@ async function hookStop(): Promise<void> {
       // without blocking Claude's next turn, so we spawn a detached node
       // subprocess and return immediately. Results land in session state.
       const config = await loadConfig();
-      if (config.emotion_judge.enabled && input.session_id && turnIdx !== null) {
-        spawnScoreTurn(input.session_id, turnIdx);
+      if (config.emotion_judge.enabled && sessionId && turnIdx !== null) {
+        spawnScoreTurn(sessionId, turnIdx);
       }
     }
   } catch {

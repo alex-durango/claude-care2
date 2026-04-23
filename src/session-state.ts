@@ -92,23 +92,25 @@ export async function recordTurn(
   cwd?: string,
   transcriptPath?: string,
 ): Promise<SessionState> {
-  const state = await loadSession(sessionId, cwd);
-  if (transcriptPath) state.transcript_path = transcriptPath;
-  const scoreBefore = state.running_score;
-  const decayed = scoreBefore * DECAY;
-  const contribution = signals.reduce((sum, s) => sum + s.weight * Math.max(1, s.hits), 0);
-  const scoreAfter = decayed + contribution;
-  state.running_score = scoreAfter;
-  state.last_updated = new Date().toISOString();
-  state.turns.push({
-    ts: state.last_updated,
-    source,
-    signals,
-    score_before: scoreBefore,
-    score_after: scoreAfter,
+  return withSessionLock(sessionId, async () => {
+    const state = await loadSession(sessionId, cwd);
+    if (transcriptPath) state.transcript_path = transcriptPath;
+    const scoreBefore = state.running_score;
+    const decayed = scoreBefore * DECAY;
+    const contribution = signals.reduce((sum, s) => sum + s.weight * Math.max(1, s.hits), 0);
+    const scoreAfter = decayed + contribution;
+    state.running_score = scoreAfter;
+    state.last_updated = new Date().toISOString();
+    state.turns.push({
+      ts: state.last_updated,
+      source,
+      signals,
+      score_before: scoreBefore,
+      score_after: scoreAfter,
+    });
+    await saveSession(state);
+    return state;
   });
-  await saveSession(state);
-  return state;
 }
 
 export async function listSessions(): Promise<SessionState[]> {

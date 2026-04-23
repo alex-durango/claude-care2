@@ -173,11 +173,26 @@ body {
   opacity: 0.75;
 }
 .session-toggle .sid {
-  color: var(--fg);
+  color: var(--fg-dim);
   letter-spacing: 0.15em;
 }
-.session-toggle.past .dim {
+.session-toggle.live {
+  border-color: var(--fg-dim);
+  color: var(--fg);
+}
+.session-toggle.live .dim {
   color: var(--accent, var(--fg));
+}
+.session-toggle.live .sid {
+  color: var(--fg);
+}
+.session-toggle.past {
+  border-color: var(--fg-ghost);
+  color: var(--fg-low);
+}
+.session-toggle.past .dim,
+.session-toggle.past .sid {
+  color: var(--fg-low);
 }
 .session-toggle .caret {
   font-size: 0.9em;
@@ -228,6 +243,10 @@ body {
   color: var(--fg);
 }
 .session-row.active {
+  color: var(--fg-dim);
+  border-left-color: var(--fg-low);
+}
+.session-row.live-active {
   color: var(--fg);
   border-left-color: var(--fg);
 }
