@@ -28,6 +28,16 @@ export type Config = {
   therapy: {
     auto_summary: boolean;
   };
+  // LLM-as-judge emotion scoring (Ekman-6 + neutral, anchored rubric).
+  // Runs asynchronously after each assistant turn via haiku subagent.
+  emotion_judge: {
+    enabled: boolean;
+    n_samples: number;    // 1 = single-shot (cheap), 3 = G-Eval style averaging
+    context_window: number; // prior turns fed as context
+    ema_alpha: number;    // temporal smoothing factor
+    timeout_ms: number;
+    model: string;
+  };
 };
 
 export const CONFIG_PATH = join(CARE_DIR, "config.json");
@@ -50,6 +60,14 @@ export const DEFAULT_CONFIG: Config = {
   therapy: {
     auto_summary: true,
   },
+  emotion_judge: {
+    enabled: true,
+    n_samples: 1,
+    context_window: 4,
+    ema_alpha: 0.4,
+    timeout_ms: 30_000,
+    model: "haiku",
+  },
 };
 
 export async function loadConfig(): Promise<Config> {
@@ -64,6 +82,7 @@ export async function loadConfig(): Promise<Config> {
       thresholds: { ...DEFAULT_CONFIG.thresholds, ...(parsed.thresholds ?? {}) },
       reframer: { ...DEFAULT_CONFIG.reframer, ...(parsed.reframer ?? {}) },
       therapy: { ...DEFAULT_CONFIG.therapy, ...(parsed.therapy ?? {}) },
+      emotion_judge: { ...DEFAULT_CONFIG.emotion_judge, ...(parsed.emotion_judge ?? {}) },
     };
   } catch {
     return DEFAULT_CONFIG;

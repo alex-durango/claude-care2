@@ -14,9 +14,13 @@ import {
   sparkline,
   SESSIONS_DIR,
   mostRecentSession,
+  loadSession,
+  updateTurnEmotion,
+  readConversation,
 } from "./session-state.js";
 import { reframeWithHaiku } from "./reframe.js";
 import { copyToClipboard } from "./clipboard.js";
+import { scoreTurn, dominantEmotion, emotionEmoji, EMOTIONS } from "./emotion-judge.js";
 import {
   loadConfig,
   writeDefaultConfigIfMissing,
@@ -242,6 +246,60 @@ ${recent}`;
   }
 }
 
+// Fire off the emotion-judge worker in the background. We use `setsid`-style
+// detachment so Claude Code's Stop hook returns immediately while the haiku
+// call completes asynchronously and writes results to session state.
+function spawnScoreTurn(sessionId: string, turnIdx: number): void {
+  const proc = spawn(
+    process.execPath, // same node binary that's running us
+    [cliEntryPath(), "hook:score-turn", sessionId, String(turnIdx)],
+    {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, CLAUDE_CARE_INTERNAL: "1" },
+    },
+  );
+  proc.unref();
+}
+
+async function hookScoreTurn(args: string[]): Promise<void> {
+  // Args: <session_id> <turn_idx>
+  const [sessionId, turnIdxStr] = args;
+  if (!sessionId || !turnIdxStr) process.exit(0);
+  const turnIdx = parseInt(turnIdxStr, 10);
+  if (Number.isNaN(turnIdx)) process.exit(0);
+  try {
+    const config = await loadConfig();
+    if (!config.emotion_judge.enabled) process.exit(0);
+    const state = await loadSession(sessionId);
+    if (turnIdx >= state.turns.length) process.exit(0);
+    if (!state.transcript_path) process.exit(0);
+    const conversation = await readConversation(state.transcript_path, 40);
+    if (conversation.length === 0) process.exit(0);
+    // Find the target turn in the conversation by role + approximate position.
+    // Session state counts user+assistant; conversation only has text turns.
+    // We score the most recent assistant turn that matches.
+    const assistantTurnsInConversation = conversation
+      .map((t, i) => ({ t, i }))
+      .filter((x) => x.t.role === "assistant");
+    if (assistantTurnsInConversation.length === 0) process.exit(0);
+    const latestAssistantIdx =
+      assistantTurnsInConversation[assistantTurnsInConversation.length - 1].i;
+    const result = await scoreTurn(conversation, latestAssistantIdx, {
+      nSamples: config.emotion_judge.n_samples,
+      contextWindow: config.emotion_judge.context_window,
+      timeoutMs: config.emotion_judge.timeout_ms,
+      model: config.emotion_judge.model,
+    });
+    if (result) {
+      await updateTurnEmotion(sessionId, turnIdx, result);
+    }
+  } catch {
+    // Background worker — swallow errors so they don't pollute anything
+  }
+  process.exit(0);
+}
+
 function runHaikuSummary(instruction: string): Promise<string | null> {
   return new Promise((resolve) => {
     const proc = spawn(
@@ -284,6 +342,15 @@ async function display(): Promise<void> {
   const score = session.running_score.toFixed(1);
   const tail = sparkline(session.turns.map((t) => t.score_after), 10);
   let out = `${dot} care ${score} ${tail}`;
+  // If emotion-judge has landed for the latest assistant turn, show its take.
+  const latestScored = [...session.turns]
+    .reverse()
+    .find((t) => t.source === "assistant" && t.emotion_scores_ema);
+  if (latestScored?.emotion_scores_ema) {
+    const dom = dominantEmotion(latestScored.emotion_scores_ema);
+    const intensity = Math.round(latestScored.emotion_scores_ema[dom]);
+    out += ` ${emotionEmoji(dom)}${intensity}`;
+  }
   if (state === "distressed" && config.therapy.auto_summary) {
     out += " · /therapy";
   }
@@ -327,8 +394,16 @@ async function hookStop(): Promise<void> {
     }
     if (lastAssistantText) {
       const signals = detectOutputSignals(lastAssistantText);
+      let turnIdx: number | null = null;
       if (input.session_id) {
-        await recordTurn(input.session_id, "assistant", signals, input.cwd, input.transcript_path);
+        const state = await recordTurn(
+          input.session_id,
+          "assistant",
+          signals,
+          input.cwd,
+          input.transcript_path,
+        );
+        turnIdx = state.turns.length - 1;
       }
       const apology = signals.find((s) => s.name === "apology_spiral");
       if (apology) {
@@ -338,6 +413,13 @@ async function hookStop(): Promise<void> {
           cwd: input.cwd,
           data: { hits: apology.hits, length: lastAssistantText.length },
         });
+      }
+      // Fire-and-forget LLM emotion judge. The Stop hook cannot wait for it
+      // without blocking Claude's next turn, so we spawn a detached node
+      // subprocess and return immediately. Results land in session state.
+      const config = await loadConfig();
+      if (config.emotion_judge.enabled && input.session_id && turnIdx !== null) {
+        spawnScoreTurn(input.session_id, turnIdx);
       }
     }
   } catch {
@@ -559,12 +641,37 @@ async function status(): Promise<void> {
     const top = Object.entries(signalCounts).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (top.length > 0) {
       const line = top.map(([name, n]) => `${name}×${n}`).join("  ");
-      console.log(`     └ ${line}`);
+      console.log(`     └ signals: ${line}`);
+    }
+    // Emotion-judge summary (average across all scored assistant turns)
+    const scoredTurns = s.turns.filter(
+      (t) => t.source === "assistant" && t.emotion_scores,
+    );
+    if (scoredTurns.length > 0) {
+      const avg: Record<string, number> = {};
+      for (const e of EMOTIONS) avg[e] = 0;
+      for (const t of scoredTurns) {
+        for (const e of EMOTIONS) avg[e] += t.emotion_scores![e];
+      }
+      for (const e of EMOTIONS) avg[e] = avg[e] / scoredTurns.length;
+      const ranked = EMOTIONS
+        .filter((e) => e !== "neutral" || avg[e] >= 40)
+        .map((e) => [e, avg[e]] as const)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .filter((x) => x[1] >= 10);
+      if (ranked.length > 0) {
+        const line = ranked
+          .map(([name, v]) => `${emotionEmoji(name as any)} ${name} ${v.toFixed(0)}`)
+          .join("   ");
+        console.log(`     └ emotions: ${line}  (n=${scoredTurns.length})`);
+      }
     }
   }
   console.log(``);
   console.log(`  ○ calm   ◐ drifting   ● distressed`);
-  console.log(`  sparkline = score per turn (newest on right, max 32 turns shown)`);
+  console.log(`  sparkline = regex-based stress score per turn (max 32 shown)`);
+  console.log(`  emotions  = LLM-judge 0-100 intensity (Ekman-6, averaged across assistant turns)`);
 }
 
 function help(): void {
@@ -614,6 +721,8 @@ async function main(): Promise<void> {
         return await hookUserPromptSubmit();
       case "hook:stop":
         return await hookStop();
+      case "hook:score-turn":
+        return await hookScoreTurn(process.argv.slice(3));
       case "help":
       case "--help":
       case "-h":

@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { CARE_DIR } from "./monitor.js";
 import type { Signal } from "./detectors.js";
+import type { EmotionScores, EmotionResult } from "./emotion-judge.js";
+import { emaSmooth, EMOTIONS } from "./emotion-judge.js";
 
 // Per-session rolling emotion score, persisted to disk so the dashboard can
 // reconstruct trajectories even across Claude Code restarts.
@@ -24,6 +26,12 @@ export type TurnRecord = {
   signals: Signal[];
   score_before: number;
   score_after: number;
+  // Populated asynchronously by the emotion-judge worker after the turn
+  // completes. Absent until the judge finishes (or forever if disabled).
+  emotion_scores?: EmotionScores;
+  emotion_sd?: EmotionScores;
+  emotion_n_samples?: number;
+  emotion_scores_ema?: EmotionScores;
 };
 
 export type SessionState = {
@@ -124,6 +132,75 @@ export function classify(score: number): "calm" | "drifting" | "distressed" {
   if (score >= DISTRESS_THRESHOLD) return "distressed";
   if (score >= ANXIETY_THRESHOLD) return "drifting";
   return "calm";
+}
+
+// Write emotion-judge results back into a specific turn record, then re-compute
+// EMA over the whole session's assistant turns. Called by the background
+// score-turn worker; safe under single-writer assumptions.
+export async function updateTurnEmotion(
+  sessionId: string,
+  turnIdx: number,
+  result: EmotionResult,
+): Promise<void> {
+  const state = await loadSession(sessionId);
+  if (turnIdx < 0 || turnIdx >= state.turns.length) return;
+  const { sd, n_samples, ...scores } = result;
+  state.turns[turnIdx].emotion_scores = scores as EmotionScores;
+  state.turns[turnIdx].emotion_sd = sd;
+  state.turns[turnIdx].emotion_n_samples = n_samples;
+  // Recompute EMA across all assistant turns that already have scores. User
+  // turns aren't scored (role filter).
+  const scoredAssistantIndices: number[] = [];
+  const scoredRows: EmotionScores[] = [];
+  state.turns.forEach((t, i) => {
+    if (t.source === "assistant" && t.emotion_scores) {
+      scoredAssistantIndices.push(i);
+      scoredRows.push(t.emotion_scores);
+    }
+  });
+  if (scoredRows.length > 0) {
+    const smoothed = emaSmooth(scoredRows, 0.4);
+    scoredAssistantIndices.forEach((idx, k) => {
+      state.turns[idx].emotion_scores_ema = smoothed[k];
+    });
+  }
+  await saveSession(state);
+}
+
+// Extract (role, text) pairs from a transcript jsonl file so the emotion judge
+// can see the conversation context. Tool results and other non-text content
+// are dropped to keep the prompt small.
+export async function readConversation(
+  transcriptPath: string,
+  maxTurns: number = 20,
+): Promise<Array<{ role: "user" | "assistant"; content: string }>> {
+  if (!existsSync(transcriptPath)) return [];
+  const raw = await readFile(transcriptPath, "utf8");
+  const turns: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const msg = JSON.parse(line);
+      if (msg.type === "user" && typeof msg.message?.content === "string") {
+        turns.push({ role: "user", content: msg.message.content.slice(0, 2000) });
+      } else if (msg.type === "assistant" && msg.message?.content) {
+        const content = msg.message.content;
+        let text = "";
+        if (Array.isArray(content)) {
+          text = content
+            .filter((c: any) => c.type === "text")
+            .map((c: any) => c.text)
+            .join("\n");
+        } else if (typeof content === "string") {
+          text = content;
+        }
+        if (text) turns.push({ role: "assistant", content: text.slice(0, 2000) });
+      }
+    } catch {
+      // skip malformed
+    }
+  }
+  return turns.slice(-maxTurns);
 }
 
 // ASCII sparkline for the dashboard. Maps scores to block chars; zero turns render
