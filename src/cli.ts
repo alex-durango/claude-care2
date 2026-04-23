@@ -420,7 +420,14 @@ async function installSlashCommands(): Promise<void> {
   if (!existsSync(COMMANDS_DIR)) {
     await mkdir(COMMANDS_DIR, { recursive: true });
   }
-  await cp(therapySrc, THERAPY_COMMAND_PATH);
+  // Substitute the CLI invocation path. `claude-care` only lives on PATH when
+  // the user has the package globally installed, which isn't guaranteed with
+  // `npx claude-care install`. Using a node + absolute path reference makes
+  // the slash command work regardless of how the user installed.
+  const template = await readFile(therapySrc, "utf8");
+  const cliCommand = `node ${JSON.stringify(cliEntryPath())}`;
+  const rendered = template.replace(/\{\{CLAUDE_CARE_CLI\}\}/g, cliCommand);
+  await writeFile(THERAPY_COMMAND_PATH, rendered, "utf8");
 }
 
 async function removeSlashCommands(): Promise<void> {

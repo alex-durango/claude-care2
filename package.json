@@ -1,6 +1,6 @@
 {
   "name": "claude-care",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Keep Claude calm so it does its best work. Static framing + prompt monitoring for Claude Code.",
   "bin": {
     "claude-care": "dist/cli.js"
@@ -10,7 +10,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/cli.js",
     "prepublishOnly": "npm run build",
     "dev": "tsc --watch"
   },
