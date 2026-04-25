@@ -1029,7 +1029,6 @@ function registerClaudeCareHooks(settings: Settings): Settings {
   addEvent("SessionStart", "hook:session-start", "startup|resume|clear|compact");
   addEvent("UserPromptSubmit", "hook:user-prompt-submit");
   addEvent("Stop", "hook:stop");
-  addEvent("PostCompact", "hook:post-compact", "manual|auto");
   return settings;
 }
 

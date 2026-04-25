@@ -246,16 +246,19 @@ function isTherapyCommandText(content) {
 }
 
 async function readTherapyEvents(sessionId, transcriptTurns = []) {
-  if (!sessionId || !existsSync(EVENTS_PATH)) return [];
+  if (!sessionId) return [];
   try {
-    const raw = await readFile(EVENTS_PATH, "utf8");
-    const events = raw
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        try { return JSON.parse(line); } catch { return null; }
-      })
-      .filter((event) => event && event.session_id === sessionId);
+    let events = [];
+    if (existsSync(EVENTS_PATH)) {
+      const raw = await readFile(EVENTS_PATH, "utf8");
+      events = raw
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          try { return JSON.parse(line); } catch { return null; }
+        })
+        .filter((event) => event && event.session_id === sessionId);
+    }
     const therapyCommands = transcriptTurns
       .filter((turn) => turn.role === "user" && turn.ts && isTherapyCommandText(turn.content))
       .map((turn) => ({
@@ -265,7 +268,8 @@ async function readTherapyEvents(sessionId, transcriptTurns = []) {
         isCompact: String(turn.content).trim().toLowerCase().startsWith("/compact"),
       }))
       .filter((turn) => Number.isFinite(turn.time));
-    const compactEvents = events
+
+    const compactAnchors = events
       .filter((event) => event.type === "compact_done")
       .slice(-20)
       .map((event) => {
@@ -281,15 +285,28 @@ async function readTherapyEvents(sessionId, transcriptTurns = []) {
               candidate.time > turn.time
             ))
           );
+        if (!anchor) return null;
         return {
-          ts: anchor?.ts ?? event.ts,
+          anchor_ts: anchor.ts,
           compact_ts: event.ts,
-          source: anchor ? "command" : "compact_done",
-          command: anchor?.content ?? null,
           trigger: event.data?.trigger ?? null,
           compact_summary_chars: event.data?.compact_summary_chars ?? 0,
         };
-      });
+      })
+      .filter(Boolean);
+
+    const commandEvents = therapyCommands.map((turn) => {
+      const compact = compactAnchors.find((event) => event.anchor_ts === turn.ts);
+      return {
+        ts: turn.ts,
+        compact_ts: compact?.compact_ts ?? null,
+        source: "command",
+        command: turn.content,
+        trigger: compact?.trigger ?? (turn.isCompact ? "manual" : "therapy"),
+        compact_summary_chars: compact?.compact_summary_chars ?? 0,
+      };
+    });
+
     const autoEvents = events
       .filter((event) => event.type === "therapy_auto_triggered")
       .slice(-20)
@@ -302,7 +319,7 @@ async function readTherapyEvents(sessionId, transcriptTurns = []) {
         threshold: event.data?.threshold ?? null,
         turn_idx: event.data?.turn_idx ?? null,
       }));
-    return [...compactEvents, ...autoEvents]
+    return [...commandEvents, ...autoEvents]
       .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
       .slice(-20);
   } catch {
