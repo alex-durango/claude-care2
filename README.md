@@ -56,9 +56,10 @@ out: "Add a null check to parseUser() to handle null cases.
 
 A slash command installed at `~/.claude/commands/therapy.md`. When you type `/therapy`:
 
-1. Prints a real `/compact` command with Claude Care therapy instructions
-2. Claude Code compacts the session while preserving technical context and neutralizing hostile or panicked wording
-3. Claude returns in a centered, focused state
+1. Gives a short mindfulness reset adapted for developer work
+2. Prints a real `/compact` command with Claude Care therapy instructions
+3. Claude Code compacts the session while preserving technical context and neutralizing hostile or panicked wording
+4. Claude returns in a centered, focused state
 
 The emotional residue should go; the technical work should stay.
 

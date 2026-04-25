@@ -1125,7 +1125,7 @@ async function install(): Promise<void> {
   console.log(`  event log:            ${EVENTS_PATH}`);
   console.log(``);
   console.log(`Start a new Claude Code session. The framing takes effect on turn 1.`);
-  console.log(`  /therapy                 — print instructed /compact command`);
+  console.log(`  /therapy                 — short reset + instructed /compact command`);
   console.log(`  claude-care blocking on — enable active prompt blocking`);
   console.log(`  claude-care therapy-auto on — auto-trigger a reset after high strain`);
   console.log(`  claude-care status      — per-session trajectories`);
