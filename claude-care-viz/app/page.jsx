@@ -253,16 +253,25 @@ function StressLine({ prompts, therapyEvents = [], activeIdx, onSelect, dotSize 
   const innerH = H - PAD_T - PAD_B;
   const xAt = (i) => n <= 1 ? PAD_L + innerW / 2 : PAD_L + (i / (n - 1)) * innerW;
   const yAt = (s) => PAD_T + innerH - (s / 100) * innerH;
-  const pts = prompts.map((p, i) => {
+
+  // AI stress line (bright yellow/gold)
+  const ptsAI = prompts.map((p, i) => {
     const s = stressForPrompt(p);
     return { x: xAt(i), y: yAt(s), s, p, i };
   });
-  const timeline = pts
+
+  // User strain line (muted orange/amber)
+  const ptsUser = prompts.map((p, i) => {
+    const s = p.user_strain ?? 0;
+    return { x: xAt(i), y: yAt(s), s, p, i };
+  });
+
+  const timeline = ptsAI
     .map((pt) => ({ ...pt, time: Date.parse(pt.p.ts_iso) }))
     .filter((pt) => Number.isFinite(pt.time));
   const xAtTime = (iso) => {
     const time = Date.parse(iso);
-    if (!Number.isFinite(time) || timeline.length === 0) return pts.at(-1)?.x ?? PAD_L;
+    if (!Number.isFinite(time) || timeline.length === 0) return ptsAI.at(-1)?.x ?? PAD_L;
     if (time <= timeline[0].time) return timeline[0].x;
     for (let i = 1; i < timeline.length; i++) {
       const prev = timeline[i - 1];
@@ -275,7 +284,8 @@ function StressLine({ prompts, therapyEvents = [], activeIdx, onSelect, dotSize 
     }
     return timeline[timeline.length - 1].x;
   };
-  const poly = pts.map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
+  const polyAI = ptsAI.map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
+  const polyUser = ptsUser.map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
   const gridYs = [0, 25, 50, 75, 100];
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} className="block overflow-visible">
@@ -289,7 +299,9 @@ function StressLine({ prompts, therapyEvents = [], activeIdx, onSelect, dotSize 
       ))}
       <line x1={PAD_L} x2={W - PAD_R} y1={H - PAD_B} y2={H - PAD_B} stroke="var(--fg-dim)" strokeWidth="1" />
       <line x1={PAD_L} x2={PAD_L} y1={PAD_T} y2={H - PAD_B} stroke="var(--fg-dim)" strokeWidth="1" />
-      <polyline points={poly} fill="none" stroke="var(--fg)" strokeWidth="1.5"
+      <polyline points={polyUser} fill="none" stroke="rgba(255, 215, 0, 0.35)" strokeWidth="1.5"
+                strokeLinejoin="round" strokeLinecap="round" />
+      <polyline points={polyAI} fill="none" stroke="var(--fg)" strokeWidth="1.5"
                 strokeLinejoin="round" strokeLinecap="round" />
       {therapyEvents.map((event, i) => {
         const x = xAtTime(event.ts);
@@ -306,12 +318,13 @@ function StressLine({ prompts, therapyEvents = [], activeIdx, onSelect, dotSize 
           </g>
         );
       })}
-      {pts.map(pt => {
+      {ptsAI.map(pt => {
         const active = pt.i === activeIdx;
         const R = { sm: [2, 4], md: [3, 5], lg: [5, 7] }[dotSize] || [3, 5];
         const F = { sm: [16, 20], md: [18, 22], lg: [22, 28] }[dotSize] || [13, 18];
         const emoji = dotStyle === "emoji";
         const readoutY = emoji ? pt.y - (active ? F[1] : F[0]) / 2 - 6 : pt.y - 10;
+        const userStrain = pt.p.user_strain ?? 0;
         return (
           <g key={pt.i} className="cursor-pointer" onClick={() => onSelect(pt.i)}>
             {emoji ? (
@@ -323,8 +336,14 @@ function StressLine({ prompts, therapyEvents = [], activeIdx, onSelect, dotSize 
                       stroke="var(--fg)" strokeWidth="1.5" />
             )}
             {active && (
-              <text x={pt.x} y={readoutY} textAnchor="middle"
-                    fontSize="10" fill="var(--fg)" letterSpacing="0.1em">{pad2(pt.s)}</text>
+              <>
+                <text x={pt.x} y={readoutY} textAnchor="middle"
+                      fontSize="10" fill="var(--fg)" letterSpacing="0.1em">{pad2(pt.s)}</text>
+                {userStrain > 0 && (
+                  <text x={pt.x} y={readoutY + 12} textAnchor="middle"
+                        fontSize="9" fill="rgba(255, 215, 0, 0.6)" letterSpacing="0.1em">↓ {pad2(userStrain)}</text>
+                )}
+              </>
             )}
             <text x={pt.x} y={H - PAD_B + 14} textAnchor="middle"
                   fontSize="9" fill={active ? "var(--fg)" : "var(--fg-dim)"}
@@ -336,6 +355,14 @@ function StressLine({ prompts, therapyEvents = [], activeIdx, onSelect, dotSize 
             textAnchor="middle" fontSize="9" fill="var(--fg-low)" letterSpacing="0.2em">STRAIN</text>
       <text x={PAD_L + innerW / 2} y={H - 4} textAnchor="middle"
             fontSize="9" fill="var(--fg-low)" letterSpacing="0.2em">PROMPT →</text>
+      <g className="legend">
+        <rect x={W - PAD_R - 140} y={PAD_T + 2} width="138" height="24" fill="var(--bg)" stroke="var(--fg-ghost)" strokeWidth="0.5" />
+        <line x1={W - PAD_R - 135} x2={W - PAD_R - 125} y1={PAD_T + 10} y2={PAD_T + 10}
+              stroke="var(--fg)" strokeWidth="1.5" />
+        <text x={W - PAD_R - 120} y={PAD_T + 13} fontSize="8" fill="var(--fg-dim)" letterSpacing="0.05em">ai · user↓</text>
+        <line x1={W - PAD_R - 135} x2={W - PAD_R - 125} y1={PAD_T + 18} y2={PAD_T + 18}
+              stroke="rgba(255, 215, 0, 0.35)" strokeWidth="1.5" />
+      </g>
     </svg>
   );
 }

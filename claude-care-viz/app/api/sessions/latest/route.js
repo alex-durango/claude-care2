@@ -362,6 +362,20 @@ function judgeStatus(session, scoreEvents) {
   };
 }
 
+// Extract hostile signal contribution from user turn's signals.
+function userHostilityScore(signals) {
+  if (!Array.isArray(signals)) return 0;
+  let score = 0;
+  for (const signal of signals) {
+    if (signal.name && signal.name.startsWith("user:")) {
+      // Hostile markers: threat(2), insult(3), contempt(2), panic(2), profanity(3), allcaps(1)
+      score += (signal.weight ?? 1) * Math.max(1, signal.hits ?? 0);
+    }
+  }
+  // Scale to 0-100 like stress values. Raw score saturates around 15-20 for hostile prompts.
+  return clamp100(score * 4);
+}
+
 // Turn the raw session-state (our CLI's format) into the shape the viz
 // expects. Rules:
 //   - one viz-prompt per scored assistant turn
@@ -369,6 +383,7 @@ function judgeStatus(session, scoreEvents) {
 //   - `emotion` = dominant emotion by highest intensity
 //   - `valence`/`arousal` = weighted mean over all 12 scores (not just dominant)
 //   - `emotion_scores` = full 12-d vector (passed through for the probe panel)
+//   - `user_strain` = hostility/pressure in the preceding user prompt (0-100)
 function mapSessionToPrompts(session, transcriptTurns) {
   if (!session?.turns?.length) return [];
 
@@ -400,10 +415,12 @@ function mapSessionToPrompts(session, transcriptTurns) {
   const prompts = [];
   let n = 1;
   let latestUserPressure = 0;
+  let latestUserHostility = 0;
   let latestUserText = "";
   for (const turn of session.turns) {
     if (turn.source === "user") {
       latestUserPressure = pressureFromScore(turn.score_after);
+      latestUserHostility = userHostilityScore(turn.signals);
       latestUserText = nearestUserText(turn.ts) || latestUserText;
       continue;
     }
@@ -423,6 +440,7 @@ function mapSessionToPrompts(session, transcriptTurns) {
     latestUserText = "";
     const pressure = Math.max(latestUserPressure, pressureFromScore(turn.score_after));
     const stress = Math.max(vectorStress(scores), pressure);
+    const userStrain = Math.max(latestUserHostility, latestUserPressure);
     prompts.push({
       t: formatTime(turn.ts),
       ts_iso: turn.ts,
@@ -432,6 +450,7 @@ function mapSessionToPrompts(session, transcriptTurns) {
       arousal,
       stress,
       pressure,
+      user_strain: userStrain,
       metrics: paperMetrics(scores, pressure),
       text: truncate(text, 220),
       emotion_scores: scores,
