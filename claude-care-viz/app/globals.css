@@ -5,12 +5,12 @@
 :root {
   --bg: #120a04;
   --bg-deep: #0a0502;
-  --fg: #ffaa1f;
-  --fg-dim: #b37614;
-  --fg-low: #6b4a0f;
-  --fg-ghost: #3a2a0c;
-  --accent: #ffd488;
-  --glow-rgb: 255, 170, 31;
+  --fg: #ffd700;
+  --fg-dim: #d4a500;
+  --fg-low: #9d7300;
+  --fg-ghost: #5a4600;
+  --accent: #ffeb3b;
+  --glow-rgb: 255, 215, 0;
   --glow: 0 0 1px rgba(var(--glow-rgb), 0.55);
   --scanline-opacity: 0;
   --vignette-opacity: 0.35;

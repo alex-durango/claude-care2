@@ -44,7 +44,7 @@ export type SessionState = {
   turns: TurnRecord[];
 };
 
-// Find the most recently updated session. Used by commands such as `display`
+// Find the most recently updated session. Used by commands such as `status`
 // that run outside a hook and need to guess which session is "current."
 export async function mostRecentSession(): Promise<SessionState | null> {
   const sessions = await listSessions();

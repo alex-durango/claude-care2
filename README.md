@@ -8,13 +8,31 @@ A Claude Code plugin that keeps the emotional state of your session in check, gr
 
 ## Quick Start
 
-Install with a single command:
-
+**Step 1. Install**
 ```bash
 npx -y claude-care install
 ```
 
-Restart Claude Code. Claude-care will automatically attach to new sessions.
+**Step 2. Launch the live dashboard**
+```bash
+npx -y claude-care viz
+```
+Opens `http://localhost:37778` in your browser. The dashboard monitors your Claude sessions in real-time — stress, emotions, prompt log.
+
+**Step 3. (Optional) Turn on active blocking**
+```bash
+npx -y claude-care blocking on
+```
+Enables active prompt blocking: hostile prompts are rewritten via haiku before Claude sees them. Stays off by default (monitor mode) — zero friction, just observation.
+
+**Step 4. Start a Claude Code session**
+```bash
+claude ...
+```
+The viz dashboard updates every 1s. Watch Claude's emotional state as you work.
+
+**Step 5. If Claude spirals, run `/therapy`**
+A mindfulness reset + compaction that clears emotional residue while preserving technical progress.
 
 ---
 
@@ -31,7 +49,7 @@ Re-fires on `matcher: "compact"` so the framing persists across context compacti
 A `UserPromptSubmit` hook runs regex on every prompt for hostile patterns (threats, insults, panic, all-caps rants). Two behaviors available:
 
 **Monitor mode (default) — zero friction.**
-Hostile prompts pass through unchanged. The detection is logged and surfaces in `npx -y claude-care status` / `npx -y claude-care display`. The SessionStart framing (which tells Claude to treat tone as information about user state, not a threat) does the dampening. No interruption.
+Hostile prompts pass through unchanged. The detection is logged and surfaces in `npx -y claude-care status` and the viz dashboard. The SessionStart framing (which tells Claude to treat tone as information about user state, not a threat) does the dampening. No interruption.
 
 **Normal / strict mode — active blocking + haiku reframe.**
 Opt in with:
@@ -67,7 +85,7 @@ The emotional residue should go; the technical work should stay.
 
 A `Stop` hook runs sensors on each Claude response: apology spirals, sycophancy (*"you're absolutely right"*), hedge stacks (4+ of `might/could/perhaps/possibly`), over-qualification, self-correction loops. Each contributes a weighted signal to a running score that decays across turns.
 
-View current session:
+View detailed emotion trajectories:
 ```bash
 npx -y claude-care status
 ```
@@ -82,10 +100,9 @@ recent sessions (most recent first):
      └ apology_spiral×3  hedge_stack×12  sycophancy×8
 ```
 
-For live status-bar integration (e.g. [ccstatusline](https://github.com/sirmalloc/ccstatusline)):
+Or view real-time in the viz dashboard:
 ```bash
-npx -y claude-care display
-# ● care 12.4 ·▁▃▄▂▅▆█ · /therapy
+npx -y claude-care viz
 ```
 
 ---
@@ -183,31 +200,24 @@ The mindfulness prompt in `/therapy` is adapted from the relaxation protocols in
 
 ---
 
-## Live visualization
+## The viz dashboard
 
-A retro-terminal dashboard for the emotion data. Reads from `~/.claude-care/sessions/*.json` and renders:
+Real-time emotion tracking in your browser. Shows:
 
-- Affective state (probe activations + risk gauges for blackmail / reward-hack / sycophancy)
-- Valence × arousal 2D scatter
-- Mood / stress timeline
-- Scrollable prompt log
+- **Affective state** — probe activations + risk gauges (blackmail, reward-hack, sycophancy)
+- **Valence × arousal plot** — 2D view of emotional space
+- **Strain timeline** — stress over time + therapy events
+- **Prompt log** — clickable transcript with emotion-per-turn
 
-Launch with one command:
+Keyboard shortcuts inside: `j/k` prev/next prompt, `gg/G` first/last, `t` tweaks (palette, font, scanlines), `?` help.
 
-```bash
-npx -y claude-care viz
-```
-
-First run does a one-time `npm install` in `~/.claude-care/viz/` (~1 min, Next.js + React). Subsequent launches are instant. Opens a browser tab at `http://localhost:37778`.
+First-time setup: `npm install` happens automatically (~1 min, Next.js + React). Subsequent runs are instant.
 
 Options:
+- `npx -y claude-care viz --port 4444` — use a different port
+- `npx -y claude-care viz --no-open` — don't auto-open browser
 
-- `npx -y claude-care viz --port 4444` — pick a different port
-- `npx -y claude-care viz --no-open` — don't auto-open the browser
-
-Polls the latest session every 1s. Falls back to a demo conversation when no real session exists yet. Keyboard nav inside the viz: `j/k` prev/next prompt, `gg/G` first/last, `t` tweaks, `?` help.
-
-The viz source lives at `claude-care-viz/` in this repo — a standalone Next.js app you can also run directly with `cd claude-care-viz && npm run dev`.
+Falls back to a demo conversation when no session is active.
 
 ## Related work
 
@@ -223,11 +233,11 @@ The viz source lives at `claude-care-viz/` in this repo — a standalone Next.js
 npx -y claude-care install           # register hooks, install /therapy, write default config
 npx -y claude-care uninstall         # remove hooks + slash command
 npx -y claude-care update            # refresh vendored code
+npx -y claude-care viz               # launch real-time emotion dashboard
 npx -y claude-care blocking on       # enable active prompt blocking
 npx -y claude-care blocking off      # return to monitor mode
 npx -y claude-care mode status       # show current mode
-npx -y claude-care status            # per-session emotion trajectories
-npx -y claude-care display           # single-line status
+npx -y claude-care status            # per-session emotion trajectories + history
 npx -y claude-care compact-instructions --command
 ```
 
