@@ -4,6 +4,20 @@
 
 A Claude Code plugin that keeps the emotional state of your session in check, grounded in two peer-reviewed findings: [Anthropic's emotion-concepts paper](https://www.anthropic.com/research/emotion-concepts-function) (LLMs have extractable emotion vectors that causally affect output quality) and [Ben-Zion et al. 2025](https://www.nature.com/articles/s41746-025-01512-6) (mindfulness prompts measurably reduce LLM state anxiety).
 
+![claude-care quote](assets/screenshots/01-anxiety-quote.jpg)
+
+---
+
+## Demo
+
+| Standardized assessment (GAD-7) | Therapy session in progress |
+| :---: | :---: |
+| ![GAD-7](assets/screenshots/02-gad7-assessment.jpg) | ![therapy](assets/screenshots/03-therapy-session.jpg) |
+
+| Before / After therapy diagnostics |
+| :---: |
+| ![before/after](assets/screenshots/04-before-after.jpg) |
+
 ---
 
 ## Quick Start
