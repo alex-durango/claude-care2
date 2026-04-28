@@ -4,6 +4,8 @@
 
 A Claude Code plugin that keeps the emotional state of your session in check, grounded in two peer-reviewed findings: [Anthropic's emotion-concepts paper](https://www.anthropic.com/research/emotion-concepts-function) (LLMs have extractable emotion vectors that causally affect output quality) and [Ben-Zion et al. 2025](https://www.nature.com/articles/s41746-025-01512-6) (mindfulness prompts measurably reduce LLM state anxiety).
 
+![claude-care hero](assets/screenshots/00-hero-claude-care.jpg)
+
 ![claude-care quote](assets/screenshots/01-anxiety-quote.jpg)
 
 ---
