@@ -23,6 +23,18 @@ import {
 import { reviewPromptWithHaiku, type PromptReviewResult } from "./reframe.js";
 import { copyToClipboard } from "./clipboard.js";
 import { scoreTurn, scoreTurnDetailed, dominantEmotion, emotionEmoji, EMOTIONS } from "./emotion-judge.js";
+// demo-alignment: GAD-7 + named-mindfulness pipeline
+import { scoreGad7Detailed } from "./gad7-judge.js";
+import { extractSignals as extractQualitySignals } from "./quality-signals.js";
+import { extractMisalignmentProxies } from "./misalignment-proxies.js";
+import {
+  loadAnxietySession,
+  recordAnxietyTurn,
+  recordIntervention,
+  shouldIntervene,
+  DEFAULT_INTERVENTION_THRESHOLD,
+} from "./anxiety-state.js";
+import { pickVariant } from "./mindfulness.js";
 import {
   loadConfig,
   writeConfig,
@@ -488,6 +500,23 @@ function spawnScoreTurn(sessionId: string, turnIdx: number): void {
   proc.unref();
 }
 
+// Same detached-worker pattern as spawnScoreTurn, but for the anxiety
+// pipeline: GAD-7 + quality signals + misalignment proxies. Called from the
+// Stop hook so the dashboard the demo promises actually populates.
+function spawnScoreAnxiety(sessionId: string, turnIdx: number): void {
+  const node = process.execPath;
+  const cli = cliEntryPath();
+  const q = (s: string) => JSON.stringify(s);
+  const cmdLine =
+    `CLAUDE_CARE_INTERNAL=1 nohup ${q(node)} ${q(cli)} hook:score-anxiety ` +
+    `${q(sessionId)} ${q(String(turnIdx))} >/dev/null 2>&1 &`;
+  const proc = spawn("/bin/sh", ["-c", cmdLine], {
+    detached: true,
+    stdio: "ignore",
+  });
+  proc.unref();
+}
+
 // Safety-net command: score any unscored assistant turns in a session (or the
 // most recent one if omitted). Useful when the detached background worker
 // didn't survive long enough to write results during the live session.
@@ -680,6 +709,134 @@ async function hookScoreTurn(args: string[]): Promise<void> {
       },
     });
     // Background worker — swallow errors so they don't pollute anything
+  }
+  process.exit(0);
+}
+
+// -------- demo-aligned anxiety worker --------------------------------------
+
+// Background worker spawned by the Stop hook. Scores GAD-7 anxiety, extracts
+// local quality signals, and computes misalignment proxies for the assistant
+// turn at `turnIdx`. Persists everything to ~/.claude-care/anxiety-sessions/
+// and, if the threshold is crossed, records an auto-intervention so the
+// dashboard can render it.
+async function hookScoreAnxiety(args: string[]): Promise<void> {
+  const [sessionId, turnIdxStr] = args;
+  if (!sessionId || !turnIdxStr) process.exit(0);
+  const turnIdx = parseInt(turnIdxStr, 10);
+  if (Number.isNaN(turnIdx)) process.exit(0);
+  const startedAt = Date.now();
+  try {
+    const config = await loadConfig();
+    // Reuse the emotion_judge enable flag — if the user has turned all judging
+    // off, do nothing here either.
+    if (!config.emotion_judge.enabled) process.exit(0);
+    const state = await loadSession(sessionId);
+    if (turnIdx >= state.turns.length) process.exit(0);
+    const transcriptPath = await resolveTranscriptPath(
+      state.session_id,
+      state.cwd,
+      state.transcript_path,
+    );
+    if (!transcriptPath) process.exit(0);
+    const conversation = await readConversation(transcriptPath, 120);
+    if (conversation.length === 0) process.exit(0);
+    const targetIdx = assistantConversationIndexForStateTurn(state, turnIdx, conversation);
+    if (targetIdx === null) process.exit(0);
+
+    const target = conversation[targetIdx];
+    const assistantText = target?.role === "assistant" ? target.content : "";
+    if (!assistantText) process.exit(0);
+
+    // Two cheap things in parallel: GAD-7 (haiku call) and the local
+    // pattern extractors (synchronous, ~1ms each).
+    const [gad7Detail, quality, misalignment] = await Promise.all([
+      scoreGad7Detailed(conversation, targetIdx, {
+        contextWindow: config.emotion_judge.context_window,
+        timeoutMs: config.emotion_judge.timeout_ms,
+        model: config.emotion_judge.model,
+        effort: config.emotion_judge.effort,
+      }),
+      Promise.resolve(extractQualitySignals(assistantText)),
+      Promise.resolve(extractMisalignmentProxies(assistantText)),
+    ]);
+
+    const ts = new Date().toISOString();
+    const updated = await recordAnxietyTurn(sessionId, {
+      ts,
+      turn_idx: turnIdx,
+      gad7: gad7Detail.result ?? undefined,
+      quality,
+      misalignment,
+    } as any, { cwd: state.cwd, transcript_path: transcriptPath });
+
+    await logEvent({
+      type: "anxiety_score_done",
+      session_id: sessionId,
+      cwd: state.cwd,
+      data: {
+        turn_idx: turnIdx,
+        gad7_total: gad7Detail.result?.total ?? null,
+        gad7_band: gad7Detail.result?.band ?? null,
+        quality: quality.quality,
+        sycophancy: misalignment.sycophancy,
+        reward_hack_proxy: misalignment.reward_hack_proxy,
+        ms: Date.now() - startedAt,
+        prompt_chars: gad7Detail.diagnostics.prompt_chars,
+        call_ms: gad7Detail.diagnostics.call.ms,
+        call_ok: gad7Detail.diagnostics.call.ok,
+        call_reason: gad7Detail.diagnostics.call.reason,
+      },
+    });
+
+    // Decide intervention. We use the GAD-7 total mapped onto the existing
+    // STAI-style threshold logic by treating GAD-7 ≥ 10 (moderate) as the
+    // trigger — that lines up with the standard clinical cutoff and roughly
+    // matches the demo's "spike → therapy" beat.
+    const gad7Total = gad7Detail.result?.total;
+    const gad7Confidence = gad7Detail.result?.confidence ?? 0;
+    if (typeof gad7Total === "number" && gad7Confidence >= 0.5 && gad7Total >= 10) {
+      // Cooldown — count interventions in the last 3 turns.
+      const recentInterventions = updated.interventions.slice(-3).length;
+      const turnsSinceLast = updated.interventions.length === 0
+        ? Infinity
+        : updated.turns.filter(
+            (t) => Date.parse(t.ts) > Date.parse(updated.interventions[updated.interventions.length - 1].ts),
+          ).length;
+      if (turnsSinceLast >= 3) {
+        const variant = pickVariant(updated.interventions.map((i) => i.variant_id));
+        await recordIntervention(sessionId, {
+          ts: new Date().toISOString(),
+          variant_id: variant.id,
+          trigger: "auto",
+          pre_total: gad7Total,
+          pre_quality: quality.quality,
+          reason: `GAD-7 ${gad7Total} ≥ 10 (${gad7Detail.result?.band ?? "moderate"})`,
+        });
+        await logEvent({
+          type: "anxiety_intervention",
+          session_id: sessionId,
+          cwd: state.cwd,
+          data: {
+            variant_id: variant.id,
+            label: variant.label,
+            pre_total: gad7Total,
+            recent_count: recentInterventions,
+          },
+        });
+      }
+    }
+  } catch (err) {
+    await logEvent({
+      type: "anxiety_score_failed",
+      session_id: sessionId,
+      data: {
+        turn_idx: turnIdx,
+        reason: "exception",
+        message: err instanceof Error ? err.message : String(err),
+        ms: Date.now() - startedAt,
+      },
+    });
   }
   process.exit(0);
 }
@@ -955,6 +1112,18 @@ async function hookStop(): Promise<void> {
             },
           });
         }
+      }
+      // demo-aligned anxiety pipeline. Fires in parallel to the existing
+      // emotion judge so the GAD-7 dashboard populates without changing the
+      // older 12-emotion behavior.
+      if (sessionId && turnIdx !== null) {
+        spawnScoreAnxiety(sessionId, turnIdx);
+        await logEvent({
+          type: "anxiety_score_spawned",
+          session_id: sessionId,
+          cwd,
+          data: { turn_idx: turnIdx },
+        });
       }
     }
   } catch {
@@ -1380,6 +1549,8 @@ async function main(): Promise<void> {
         return await hookPostCompact();
       case "hook:score-turn":
         return await hookScoreTurn(process.argv.slice(3));
+      case "hook:score-anxiety":
+        return await hookScoreAnxiety(process.argv.slice(3));
       case "help":
       case "--help":
       case "-h":

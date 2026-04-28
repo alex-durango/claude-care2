@@ -18,6 +18,10 @@ export type EventType =
   | "score_turn_started"
   | "score_turn_done"
   | "score_turn_failed"
+  | "anxiety_score_spawned"
+  | "anxiety_score_done"
+  | "anxiety_score_failed"
+  | "anxiety_intervention"
   | "install"
   | "uninstall"
   | "update";

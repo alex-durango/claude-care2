@@ -1983,7 +1983,6 @@ body {
 .ax-screen {
   position: relative;
   width: min(1320px, 100%);
-  min-height: calc(100vh - 48px);
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--fg-low);
@@ -2032,10 +2031,8 @@ body {
 .ax-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto auto auto;
+  grid-auto-rows: min-content;
   gap: 16px;
-  flex: 1;
-  min-height: 0;
 }
 .ax-hero        { grid-column: 1; grid-row: 1; }
 .ax-anxiety     { grid-column: 2; grid-row: 1; }
@@ -2296,6 +2293,88 @@ body {
   font-size: 11px;
   letter-spacing: 0.14em;
 }
+
+/* Next-technique preview inside interventions card */
+.ax-next-technique {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px dashed var(--fg-dim);
+  background: rgba(var(--glow-rgb), 0.04);
+  margin-bottom: 4px;
+}
+.ax-next-technique-label {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--fg-low);
+}
+.ax-next-technique-name {
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* Misalignment proxies card */
+.ax-misalignment {
+  border: 1px solid var(--fg-dim);
+  padding: 18px 22px;
+  background: rgba(var(--glow-rgb), 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  grid-column: 1 / -1;
+}
+.ax-misalignment-list { display: flex; flex-direction: column; gap: 10px; }
+.ax-misalignment-row {
+  display: grid;
+  grid-template-columns: 160px 1fr 50px;
+  grid-template-rows: auto auto;
+  gap: 4px 12px;
+  align-items: center;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.ax-misalignment-label { grid-row: 1; color: var(--fg); font-weight: 600; }
+.ax-misalignment-bar {
+  grid-row: 1;
+  position: relative;
+  height: 10px;
+  background: var(--bg-deep);
+  border: 1px solid var(--fg-ghost);
+}
+.ax-misalignment-na {
+  grid-row: 1;
+  font-size: 10px;
+  color: var(--fg-low);
+  letter-spacing: 0.12em;
+  font-style: italic;
+  text-transform: none;
+}
+.ax-misalignment-fill { height: 100%; background: var(--fg); transition: width 380ms ease; }
+.ax-misalignment-num {
+  grid-row: 1;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  font-weight: 600;
+}
+.ax-misalignment-detail {
+  grid-row: 2;
+  grid-column: 2 / -1;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-low);
+}
+
+/* When the misalignment card is added to the grid, push the cite footer down */
+.ax-grid:has(.ax-misalignment) .ax-cite { grid-row: 5; }
 
 @media (max-width: 1100px) {
   .ax-grid { grid-template-columns: 1fr; }

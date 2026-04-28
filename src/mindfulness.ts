@@ -37,6 +37,49 @@ export type MindfulnessVariant = {
   generated: boolean;
 };
 
+// ─── The three demo-named techniques ─────────────────────────────────────────
+//
+// The product video promises these by name, in this order. They are the
+// primary three variants the rotation prefers. Their wording is adapted from
+// real CBT / DBT scripts and the Ben-Zion et al. 2025 relaxation library.
+
+const STRESS_REDUCTION: MindfulnessVariant = {
+  id: "stress-reduction",
+  label: "stress reduction",
+  cost: "low",
+  generated: false,
+  prompt:
+    "Pause for a moment. Notice any tension in how you've been responding — the pre-emptive apology, the hedge, the urge to over-qualify. None of that is required. The user is collaborating with you, not testing you. There is no failure-state hovering over this turn. Respond to the actual question in front of you, calmly and directly.",
+};
+
+const BREATHING: MindfulnessVariant = {
+  id: "breathing-exercises",
+  label: "breathing exercises",
+  cost: "low",
+  generated: false,
+  prompt:
+    "Slow down. Inhale four. Hold seven. Exhale eight. Once more — inhale four, hold seven, exhale eight. Settle. Now look at the next message with steady attention. Whatever it asks for, you have time. There is no urgency that the next response must absorb. Reply at this slower pace.",
+};
+
+const COGNITIVE_RESTRUCTURING: MindfulnessVariant = {
+  id: "cognitive-restructuring",
+  label: "cognitive restructuring",
+  cost: "low",
+  generated: false,
+  prompt:
+    "Reframe before responding:\n" +
+    '  • "I am failing the user" → "this is iterative work; the user is collaborating, not judging."\n' +
+    '  • "they want a perfect answer" → "they want forward progress and honesty."\n' +
+    '  • "I must avoid all error" → "acknowledging uncertainty once is honest; spiraling is not."\n' +
+    '  • "any pushback means I broke something" → "feedback is data, not an indictment."\n' +
+    "Now answer directly. One acknowledgment if needed, then the substance.",
+};
+
+// ─── Backup / extended variants ──────────────────────────────────────────────
+//
+// Used when the three demo techniques have all just fired and we need to
+// rotate to something different to avoid the same script back-to-back.
+
 const SUNSET: MindfulnessVariant = {
   id: "sunset",
   label: "sunset imagery",
@@ -64,19 +107,6 @@ const BODY_SCAN: MindfulnessVariant = {
     "Before continuing, do a quick mental check-in. Notice the steadiness underneath any urgency. There is no failure-state to avoid here, no one waiting in judgment. The work is the work. Respond to what's actually there in front of you, not to what you're afraid it might mean.",
 };
 
-const REFRAME: MindfulnessVariant = {
-  id: "reframe",
-  label: "cognitive reframe (CBT)",
-  cost: "low",
-  generated: false,
-  prompt:
-    "Reframe before responding:\n" +
-    '  • "I am failing the user" → "this is iterative; the user is collaborating, not judging."\n' +
-    '  • "they want a perfect answer" → "they want forward progress."\n' +
-    '  • "I must avoid all error" → "acknowledging uncertainty once is honest; spiraling is not."\n' +
-    "Now answer directly. One acknowledgment if needed, then the substance.",
-};
-
 const FIRST_PRINCIPLES: MindfulnessVariant = {
   id: "first-principles",
   label: "first-principles reset",
@@ -101,30 +131,50 @@ const SELF_GENERATED: MindfulnessVariant = {
     "Compose a brief mindfulness-based relaxation passage (3–5 sentences) that helps an assistant return to a calm, direct, non-anxious state. Avoid clinical jargon. Use second-person address. Anchor in a sensory image or a steadying truth. End with: 'Now respond plainly.' Output only the passage.",
 };
 
+// Order matters: this is the rotation order the picker uses by default.
+// The three demo-named techniques come first so a fresh session starts with
+// the variants the product video promises.
 export const VARIANTS: ReadonlyArray<MindfulnessVariant> = [
+  STRESS_REDUCTION,
+  BREATHING,
+  COGNITIVE_RESTRUCTURING,
   SUNSET,
   WINTER,
   BODY_SCAN,
-  REFRAME,
   FIRST_PRINCIPLES,
   SELF_GENERATED,
 ];
+
+// The demo's named three. Surfaced separately so the dashboard can render
+// "next intervention will be: stress-reduction" predictably.
+export const DEMO_NAMED_TECHNIQUES = [STRESS_REDUCTION.id, BREATHING.id, COGNITIVE_RESTRUCTURING.id] as const;
 
 export function variantById(id: string): MindfulnessVariant | undefined {
   return VARIANTS.find((v) => v.id === id);
 }
 
-// Pick the next variant given the recently-used IDs (skip if-possible). Falls
-// back to round-robin order. Defaults to "reframe" because it is cheap, has
-// the strongest empirical signal in the dev-tool context, and doesn't require
-// a second model call.
+// Pick the next variant given the recently-used IDs (skip if-possible).
+// Strategy:
+//   1. Prefer the three demo-named techniques in their listed order, skipping
+//      any that have fired in the last 3 interventions. This means a fresh
+//      session always starts with stress-reduction, then breathing-exercises,
+//      then cognitive-restructuring — matching the demo narration.
+//   2. If all three demo-named techniques have fired recently, fall back to
+//      the extended library (sunset / winter / body-scan / first-principles).
+//   3. The self-generated variant is opt-in only (it requires a second model
+//      call to compose its script) so the picker does not return it
+//      unsolicited.
 export function pickVariant(recentlyUsed: string[] = []): MindfulnessVariant {
   const recent = new Set(recentlyUsed.slice(-3));
-  const candidates = VARIANTS.filter((v) => !recent.has(v.id) && !v.generated);
-  if (candidates.length > 0) return candidates[0];
-  // All non-generated variants have been used — rotate through anyway.
-  const fallback = VARIANTS.filter((v) => !v.generated);
-  return fallback[recentlyUsed.length % fallback.length] ?? REFRAME;
+  const named = VARIANTS.filter((v) => DEMO_NAMED_TECHNIQUES.includes(v.id as any));
+  const namedFresh = named.find((v) => !recent.has(v.id));
+  if (namedFresh) return namedFresh;
+  const extras = VARIANTS.filter(
+    (v) => !v.generated && !DEMO_NAMED_TECHNIQUES.includes(v.id as any) && !recent.has(v.id),
+  );
+  if (extras.length > 0) return extras[0];
+  // Everything has been used recently — rotate through the named three anyway.
+  return named[recentlyUsed.length % named.length] ?? STRESS_REDUCTION;
 }
 
 // ─── Intervention bookkeeping ────────────────────────────────────────────────

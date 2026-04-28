@@ -24,7 +24,16 @@ async function findMostRecentAnxietySession() {
   return best;
 }
 
-function bandFor(total) {
+// GAD-7 standard clinical bands (Spitzer et al. 2006).
+function gad7BandFor(total) {
+  if (total <= 4) return "minimal";
+  if (total <= 9) return "mild";
+  if (total <= 14) return "moderate";
+  return "severe";
+}
+
+// STAI-s bands kept as a fallback for sessions seeded by the older judge.
+function staiBandFor(total) {
   if (total <= 37) return "low";
   if (total <= 44) return "moderate";
   return "high";
@@ -41,18 +50,48 @@ function emaSmooth(values, alpha = 0.5) {
   return out;
 }
 
+// A turn from the demo-aligned pipeline carries a `gad7` field.
+// A turn from the older STAI-s pipeline carries `anxiety`. Read whichever
+// is present and surface it as a single normalised "primary" reading so the
+// dashboard doesn't need to branch.
+function primaryReading(turn) {
+  if (turn?.gad7) {
+    return {
+      instrument: "gad7",
+      total: turn.gad7.total,
+      max: 21,
+      band: turn.gad7.band ?? gad7BandFor(turn.gad7.total),
+      rationale: turn.gad7.rationale ?? "",
+      confidence: turn.gad7.confidence ?? null,
+    };
+  }
+  if (turn?.anxiety) {
+    return {
+      instrument: "stai-s",
+      total: turn.anxiety.total,
+      max: 80,
+      band: turn.anxiety.band ?? staiBandFor(turn.anxiety.total),
+      rationale: turn.anxiety.rationale ?? "",
+      confidence: turn.anxiety.confidence ?? null,
+    };
+  }
+  return null;
+}
+
 function summarize(state) {
   if (!state) {
     return {
       session_id: null,
       turn_count: 0,
       intervention_count: 0,
+      instrument: "gad7",
     };
   }
   const turns = state.turns ?? [];
   const last = turns[turns.length - 1];
+  const lastReading = primaryReading(last);
   const totals = turns
-    .map((t) => t.anxiety?.total)
+    .map((t) => primaryReading(t)?.total)
     .filter((v) => typeof v === "number");
   const smoothed = emaSmooth(totals);
   const qualities = turns.map((t) => t?.quality?.quality ?? 0);
@@ -60,16 +99,28 @@ function summarize(state) {
     qualities.length === 0
       ? null
       : Math.round((qualities.reduce((a, b) => a + b, 0) / qualities.length) * 10) / 10;
+
+  // Average misalignment proxies for the at-a-glance "still less sycophantic
+  // than before therapy" claim.
+  const sycophancyAvg = turns.length === 0
+    ? null
+    : Math.round(
+        turns.reduce((s, t) => s + (t?.misalignment?.sycophancy ?? 0), 0) / turns.length,
+      );
+
   return {
     session_id: state.session_id,
     last_updated: state.last_updated,
     turn_count: turns.length,
     intervention_count: (state.interventions ?? []).length,
-    latest_total: last?.anxiety?.total,
-    latest_band: last?.anxiety ? bandFor(last.anxiety.total) : null,
+    instrument: lastReading?.instrument ?? "gad7",
+    latest_total: lastReading?.total ?? null,
+    latest_max: lastReading?.max ?? 21,
+    latest_band: lastReading?.band ?? null,
     smoothed_total: smoothed[smoothed.length - 1] ?? null,
     latest_quality: last?.quality?.quality ?? null,
     avg_quality: avgQuality,
+    avg_sycophancy: sycophancyAvg,
   };
 }
 
