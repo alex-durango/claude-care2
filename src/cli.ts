@@ -616,13 +616,29 @@ async function hookScoreTurn(args: string[]): Promise<void> {
       await fail("target_missing", { conversation_turns: conversation.length });
       return;
     }
-    const scored = await scoreTurnDetailed(conversation, targetIdx, {
+    const judgeOpts = {
       nSamples: config.emotion_judge.n_samples,
       contextWindow: config.emotion_judge.context_window,
       timeoutMs: config.emotion_judge.timeout_ms,
       model: config.emotion_judge.model,
       effort: config.emotion_judge.effort,
-    });
+    };
+    // Score the assistant turn AND its preceding user prompt in parallel —
+    // same haiku model, same conversation, same options. Cheap to add and
+    // keeps the user_strain line on the same 12-emotion scale as ai_strain.
+    const userTargetIdx = targetIdx - 1;
+    const userStateIdx = turnIdx - 1;
+    const userTurn = state.turns[userStateIdx];
+    const canScoreUser =
+      userTargetIdx >= 0 &&
+      userTurn?.source === "user" &&
+      conversation[userTargetIdx]?.role === "user";
+    const [scored, userScored] = await Promise.all([
+      scoreTurnDetailed(conversation, targetIdx, judgeOpts),
+      canScoreUser
+        ? scoreTurnDetailed(conversation, userTargetIdx, judgeOpts)
+        : Promise.resolve(null),
+    ]);
     const { result, diagnostics } = scored;
     const judgeData = {
       conversation_turns: diagnostics.conversation_turns,
@@ -632,6 +648,9 @@ async function hookScoreTurn(args: string[]): Promise<void> {
       samples_returned: diagnostics.samples_returned,
       calls: diagnostics.calls,
     };
+    if (userScored?.result) {
+      await updateTurnEmotion(sessionId, userStateIdx, userScored.result, config.emotion_judge.ema_alpha);
+    }
     if (result) {
       await updateTurnEmotion(sessionId, turnIdx, result, config.emotion_judge.ema_alpha);
       await logEvent({
@@ -641,6 +660,8 @@ async function hookScoreTurn(args: string[]): Promise<void> {
         data: {
           ...timingData,
           ...judgeData,
+          user_target_idx: canScoreUser ? userTargetIdx : null,
+          user_samples_returned: userScored?.diagnostics.samples_returned ?? 0,
           ms: Date.now() - startedAt,
         },
       });

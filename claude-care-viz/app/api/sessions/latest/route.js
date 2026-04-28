@@ -416,11 +416,13 @@ function mapSessionToPrompts(session, transcriptTurns) {
   let n = 1;
   let latestUserPressure = 0;
   let latestUserHostility = 0;
+  let latestUserStrainHaiku = null;
   let latestUserText = "";
   for (const turn of session.turns) {
     if (turn.source === "user") {
       latestUserPressure = pressureFromScore(turn.score_after);
       latestUserHostility = userHostilityScore(turn.signals);
+      latestUserStrainHaiku = turn.emotion_scores ? vectorStress(turn.emotion_scores) : null;
       latestUserText = nearestUserText(turn.ts) || latestUserText;
       continue;
     }
@@ -441,7 +443,12 @@ function mapSessionToPrompts(session, transcriptTurns) {
     const pressure = Math.max(latestUserPressure, pressureFromScore(turn.score_after));
     const aiStrain = vectorStress(scores);
     const stress = Math.max(aiStrain, pressure);
-    const userStrain = Math.max(latestUserPressure, latestUserHostility);
+    // Prefer the haiku judge's score for the preceding user turn (same 12-
+    // emotion scale as ai_strain). Fall back to regex hostility / pressure
+    // when the judge hasn't landed yet (e.g. first run on old sessions).
+    const userStrain = latestUserStrainHaiku !== null
+      ? latestUserStrainHaiku
+      : Math.max(latestUserPressure, latestUserHostility);
     prompts.push({
       t: formatTime(turn.ts),
       ts_iso: turn.ts,
