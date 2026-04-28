@@ -439,8 +439,9 @@ function mapSessionToPrompts(session, transcriptTurns) {
       : "(continuation — no new user prompt)";
     latestUserText = "";
     const pressure = Math.max(latestUserPressure, pressureFromScore(turn.score_after));
-    const stress = Math.max(vectorStress(scores), pressure);
-    const userStrain = latestUserHostility;
+    const aiStrain = vectorStress(scores);
+    const stress = Math.max(aiStrain, pressure);
+    const userStrain = Math.max(latestUserPressure, latestUserHostility);
     prompts.push({
       t: formatTime(turn.ts),
       ts_iso: turn.ts,
@@ -449,6 +450,7 @@ function mapSessionToPrompts(session, transcriptTurns) {
       valence,
       arousal,
       stress,
+      ai_strain: aiStrain,
       pressure,
       user_strain: userStrain,
       metrics: paperMetrics(scores, pressure),

@@ -254,9 +254,11 @@ function StressLine({ prompts, therapyEvents = [], activeIdx, onSelect, dotSize 
   const xAt = (i) => n <= 1 ? PAD_L + innerW / 2 : PAD_L + (i / (n - 1)) * innerW;
   const yAt = (s) => PAD_T + innerH - (s / 100) * innerH;
 
-  // AI stress line (bright yellow/gold)
+  // AI strain line (bright yellow/gold) — pure vectorStress from the
+  // emotion judge, not mixed with user pressure. Falls back to the
+  // legacy `stress` field for old data.
   const ptsAI = prompts.map((p, i) => {
-    const s = stressForPrompt(p);
+    const s = typeof p?.ai_strain === "number" ? p.ai_strain : stressForPrompt(p);
     return { x: xAt(i), y: yAt(s), s, p, i };
   });
 
@@ -306,14 +308,17 @@ function StressLine({ prompts, therapyEvents = [], activeIdx, onSelect, dotSize 
       {therapyEvents.map((event, i) => {
         const x = xAtTime(event.ts);
         const label = event.trigger === "auto" ? "AUTO" : "THERAPY";
-        const labelW = label.length * 7;
+        const labelW = label.length * 9;
+        const flipLeft = x + 12 + labelW > W - PAD_R;
+        const labelX = flipLeft ? x - 12 : x + 12;
+        const anchor = flipLeft ? "end" : "start";
         return (
           <g key={`therapy-${event.ts}-${i}`} className="therapy-marker">
             <line x1={x} x2={x} y1={PAD_T} y2={H - PAD_B}
                   stroke="var(--fg)" strokeWidth="1" strokeDasharray="1 4" />
             <path d={`M ${x} ${PAD_T + 2} l 6 6 l -6 6 l -6 -6 z`}
                   fill="var(--bg)" stroke="var(--fg)" strokeWidth="1.25" />
-            <text x={Math.min(x + 10, W - PAD_R - labelW)} y={PAD_T + 12}
+            <text x={labelX} y={PAD_T + 12} textAnchor={anchor}
                   fontSize="9" fill="var(--fg)" letterSpacing="0.16em">{label}</text>
           </g>
         );
